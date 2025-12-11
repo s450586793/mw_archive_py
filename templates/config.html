@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>MakerWorld 归档控制台</title>
+  <style>
+    body { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; margin:0; padding:0; background:#f4f6f8; color:#222; }
+    .wrap { max-width: 960px; margin: 32px auto; background:#fff; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:24px 28px; }
+    h1 { margin:0 0 12px; font-size:24px; }
+    .section { margin-top:20px; }
+    label { display:block; margin:12px 0 6px; font-weight:600; }
+    textarea, input[type=text] { width:100%; padding:10px; border:1px solid #d0d7de; border-radius:8px; font-size:14px; box-sizing:border-box; }
+    button { padding:10px 16px; border:none; border-radius:8px; background:#1976d2; color:#fff; cursor:pointer; font-size:14px; }
+    button:hover { background:#1158a9; }
+    .row { display:flex; gap:12px; align-items:center; }
+    .row input { flex:1; }
+    .muted { color:#666; font-size:13px; }
+    .log-box { background:#0b1021; color:#d2e3ff; font-family: "Consolas", monospace; padding:12px; border-radius:8px; height:220px; overflow:auto; }
+    .tag { display:inline-block; padding:2px 8px; background:#e3f2fd; color:#1976d2; border-radius:12px; margin-right:6px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { border:1px solid #e5e7eb; padding:6px 8px; font-size:13px; }
+    th { background:#f5f7fa; }
+    .status-bad { color:#d32f2f; font-weight:600; }
+    .btn-delete { padding:4px 8px; background:#d32f2f; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
+    .btn-delete:hover { background:#b71c1c; }
+    .links { text-align:right; }
+    .links a { margin-left:12px; color:#1976d2; text-decoration:none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="links"><a href="/">模型库</a></div>
+  <h1>MakerWorld 归档控制台</h1>
+  <div class="muted">配置 Cookie 和下载目录，输入模型链接一键归档，支持查看缺失 3MF 列表。</div>
+
+  <div class="section" id="configSection">
+    <h3>基础配置</h3>
+    <label>Cookie</label>
+    <textarea id="cookieInput" rows="4" placeholder="请粘贴包含 cf_clearance 的完整 Cookie"></textarea>
+    <div class="row">
+      <div style="flex:1">
+        <label>下载目录</label>
+        <input type="text" id="downloadDir" readonly />
+      </div>
+      <div style="flex:1">
+        <label>日志目录</label>
+        <input type="text" id="logsDir" readonly />
+      </div>
+    </div>
+    <div class="muted" id="cookieTime">Cookie 更新时间：-</div>
+    <button onclick="saveCookie()">保存 Cookie</button>
+  </div>
+
+  <div class="section">
+    <h3>模型归档</h3>
+    <label>模型链接</label>
+    <input type="text" id="modelUrl" placeholder="https://makerworld.com.cn/zh/models/..." />
+    <div style="margin-top:10px">
+      <button onclick="startArchive()">开始归档</button>
+    </div>
+    <div class="muted">完成后提示下载目录。</div>
+  </div>
+
+  <div class="section">
+    <h3>实时日志</h3>
+    <div class="log-box" id="logBox"></div>
+  </div>
+
+  <div class="section">
+    <h3>缺失 3MF 记录</h3>
+    <div id="missingBox"></div>
+  </div>
+</div>
+
+<script>
+const logBox = document.getElementById('logBox');
+function appendLog(msg){
+  const time = new Date().toLocaleTimeString();
+  logBox.textContent += `[${time}] ${msg}\n`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+async function loadConfig(){
+  const res = await fetch('/api/config');
+  const data = await res.json();
+  document.getElementById('downloadDir').value = data.download_dir;
+  document.getElementById('logsDir').value = data.logs_dir;
+  document.getElementById('cookieTime').textContent = 'Cookie 更新时间：' + (data.cookie_updated_at || '-');
+}
+
+async function saveCookie(){
+  const cookie = document.getElementById('cookieInput').value.trim();
+  if(!cookie){ alert('请填写 cookie'); return; }
+  appendLog('保存 Cookie...');
+  const res = await fetch('/api/cookie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cookie})});
+  if(res.ok){ appendLog('Cookie 已保存'); loadConfig(); }
+  else { appendLog('保存失败'); }
+}
+
+async function startArchive(){
+  const url = document.getElementById('modelUrl').value.trim();
+  if(!url){ alert('请填写模型链接'); return; }
+  appendLog('开始归档: '+url);
+  const res = await fetch('/api/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+  if(res.ok){
+    const data = await res.json();
+    appendLog('归档成功 -> '+data.work_dir);
+    alert('归档完成，目录：'+data.work_dir);
+    loadMissing();
+  }else{
+    const err = await res.text();
+    appendLog('归档失败: '+err);
+    alert('归档失败');
+  }
+}
+
+async function deleteMissing(index){
+  if(!confirm('确定删除此记录吗？')) return;
+  appendLog('删除缺失记录 #'+index);
+  const res = await fetch('/api/logs/missing-3mf/'+index,{method:'DELETE'});
+  if(res.ok){
+    appendLog('已删除');
+    loadMissing();
+  }else{
+    appendLog('删除失败');
+  }
+}
+
+async function loadMissing(){
+  const box = document.getElementById('missingBox');
+  const res = await fetch('/api/logs/missing-3mf');
+  if(!res.ok){ box.innerHTML = '加载失败'; return; }
+  const list = await res.json();
+  if(!list.length){ box.innerHTML = '<div class="muted">暂无缺失记录</div>'; return; }
+  let html = '<table><tr><th>时间</th><th>模型</th><th>实例ID</th><th>标题</th><th>状态</th><th>操作</th></tr>';
+  list.forEach((r,i)=>{
+    html += `<tr><td>${r.time}</td><td>${r.base_name}</td><td>${r.inst_id}</td><td>${r.title||''}</td><td class="status-bad">${r.status||''}</td><td><button class="btn-delete" onclick="deleteMissing(${i})">删除</button></td></tr>`;
+  });
+  html += '</table>';
+  box.innerHTML = html;
+}
+
+loadConfig();
+loadMissing();
+</script>
+</body>
+</html>
