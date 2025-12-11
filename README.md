@@ -29,6 +29,7 @@ python server.py  # 默认 0.0.0.0:8000
   - 使用当前 Cookie 和下载目录归档模型，返回 `{status, base_name, work_dir, missing_3mf}`
 - `GET /api/config`  -> 下载目录、日志目录、cookie 文件与更新时间
 - `GET /api/logs/missing-3mf` -> 缺失 3MF 记录列表
+- `POST /api/logs/missing-3mf/redownload` -> 读取缺失记录，使用最新 Cookie 重新获取下载地址并补下 3MF
 - `GET /api/gallery` -> 扫描下载目录下 `MW_*/meta.json`，返回模型简表
 
 ## 前端

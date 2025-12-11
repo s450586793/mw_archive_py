@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from archiver import archive_model
+from archiver import archive_model, download_file, fetch_instance_3mf, parse_cookies, sanitize_filename
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -87,6 +87,123 @@ def parse_missing(cfg) -> List[dict]:
             continue
         rows.append({"time": ts, "base_name": base_name, "inst_id": inst_id, "title": title, "status": status})
     return rows
+
+
+def pick_instance_filename(inst: dict, name_hint: str = "") -> str:
+    base = sanitize_filename(inst.get("title") or inst.get("name") or str(inst.get("id") or "model"))
+    if not base:
+        base = str(inst.get("id") or "model")
+    ext = Path(name_hint).suffix if name_hint else ""
+    if not ext:
+        ext = ".3mf"
+    elif not ext.startswith("."):
+        ext = "." + ext
+    return f"{base}{ext}"
+
+
+def retry_missing_downloads(cfg, cookie: str):
+    missing_log = Path(cfg["logs_dir"]) / "missing_3mf.log"
+    if not missing_log.exists():
+        return {"processed": 0, "success": 0, "failed": 0, "details": []}
+
+    lines = [line for line in missing_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload)"})
+    session.cookies.update(parse_cookies(cookie))
+
+    remaining_lines = []
+    details = []
+    success_cnt = 0
+
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 4:
+            remaining_lines.append(line)
+            details.append({"status": "fail", "message": "行格式异常", "raw": line})
+            continue
+        _ts, base_name, inst_id, _title = parts[:4]
+        inst_id_str = str(inst_id).strip()
+        base_dir = Path(cfg["download_dir"]) / base_name
+        meta_path = base_dir / "meta.json"
+        if not meta_path.exists():
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": "meta.json 不存在"})
+            remaining_lines.append(line)
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"meta.json 读取失败: {e}"})
+            remaining_lines.append(line)
+            continue
+
+        instances = meta.get("instances") or []
+        target = next((i for i in instances if str(i.get("id")) == inst_id_str), None)
+        if not target:
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": "meta 中未找到该实例"})
+            remaining_lines.append(line)
+            continue
+
+        api_url = target.get("apiUrl") or f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id_str}/f3mf?type=download&fileType="
+        try:
+            inst_id_int = int(inst_id_str)
+        except Exception:
+            inst_id_int = inst_id_str
+
+        try:
+            name3mf, dl_url = fetch_instance_3mf(session, inst_id_int, cookie, api_url)
+        except Exception as e:
+            logger.error("实例 %s 获取 3MF 失败: %s", inst_id_str, e)
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"接口获取失败: {e}"})
+            remaining_lines.append(line)
+            continue
+
+        if not dl_url:
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": "未返回下载地址"})
+            remaining_lines.append(line)
+            continue
+
+        inst_dir = base_dir / "instances"
+        inst_dir.mkdir(parents=True, exist_ok=True)
+        file_name = pick_instance_filename(target, name3mf)
+        dest = inst_dir / file_name
+        used_existing = False
+        try:
+            if dest.exists():
+                used_existing = True
+                logger.info("实例 %s 已存在文件 %s，跳过重新下载", inst_id_str, dest)
+            else:
+                download_file(session, dl_url, dest)
+        except Exception as e:
+            logger.error("实例 %s 下载 3MF 失败: %s", inst_id_str, e)
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"下载失败: {e}"})
+            remaining_lines.append(line)
+            continue
+
+        target["downloadUrl"] = dl_url
+        if name3mf:
+            target["name"] = name3mf
+        try:
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"写入 meta.json 失败: {e}"})
+            remaining_lines.append(line)
+            continue
+
+        success_cnt += 1
+        details.append({
+            "status": "ok",
+            "base_name": base_name,
+            "inst_id": inst_id_str,
+            "file": dest.name,
+            "used_existing": used_existing,
+            "downloadUrl": dl_url,
+        })
+        logger.info("实例 %s 下载完成 -> %s", inst_id_str, dest)
+
+    failed_cnt = len(lines) - success_cnt
+    missing_log.write_text("\n".join(remaining_lines), encoding="utf-8")
+    return {"processed": len(lines), "success": success_cnt, "failed": failed_cnt, "details": details}
 
 
 def scan_gallery(cfg) -> List[dict]:
@@ -188,6 +305,19 @@ async def api_archive(body: dict):
 @app.get("/api/logs/missing-3mf")
 async def api_missing():
     return parse_missing(CFG)
+
+
+@app.post("/api/logs/missing-3mf/redownload")
+async def api_redownload_missing():
+    cookie = read_cookie(CFG)
+    if not cookie:
+        raise HTTPException(400, "请先设置 cookie")
+    try:
+        result = retry_missing_downloads(CFG, cookie)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.exception("缺失 3MF 重试下载失败")
+        raise HTTPException(500, f"重试下载失败: {e}")
 
 
 @app.delete("/api/logs/missing-3mf/{index:int}")

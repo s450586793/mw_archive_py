@@ -64,6 +64,18 @@ def download_file(session: requests.Session, url: str, dest: Path):
     log("已下载：", dest)
 
 
+def pick_instance_filename(inst: dict, name_hint: str = "") -> str:
+    base = sanitize_filename(inst.get("title") or inst.get("name") or str(inst.get("id") or "model"))
+    if not base:
+        base = str(inst.get("id") or "model")
+    ext = Path(name_hint).suffix if name_hint else ""
+    if not ext:
+        ext = ".3mf"
+    elif not ext.startswith("."):
+        ext = "." + ext
+    return f"{base}{ext}"
+
+
 def fetch_html_with_curl(url: str, raw_cookie: str) -> str:
     """
     备用：使用 curl 拉取页面，尽量复刻浏览器最小头。
@@ -220,8 +232,11 @@ def collect_design_images(design: dict, session: requests.Session, out_dir: Path
     return design_images, cover_meta
 
 
-def fetch_instance_3mf(session: requests.Session, inst_id: int, raw_cookie: str):
-    api_url = f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
+def fetch_instance_3mf(session: requests.Session, inst_id: int, raw_cookie: str, api_url: str = None):
+    """
+    获取实例的 3MF 下载地址，允许外部传入 api_url（若为空则使用默认实例接口）。
+    """
+    api_url = api_url or f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
     try:
         r = session.get(
             api_url,
@@ -886,10 +901,8 @@ def build_instance_html(inst, assets):
             name = rel
         return strip_prefix(name, base_name) if base_name else name
 
-    inst_file_map = {f.get("id"): f for f in assets.get("instance_files") or [] if f.get("file")}
-    inst_local = inst_file_map.get(inst.get("id")) or {}
-    dl_href_local = "./instances/" + inst_local.get("file") if inst_local else ""
-    dl_href_remote = inst.get("downloadUrl") or inst.get("apiUrl") or "#"
+    file_name = pick_instance_filename(inst, inst.get("name") or "")
+    dl_href_local = "./instances/" + file_name if file_name else ""
 
     chips = []
     for f in filaments:
@@ -935,7 +948,6 @@ def build_instance_html(inst, assets):
     <div>
       <strong>{title}</strong>
       {"<a class='inst-btn inst-local' href='"+dl_href_local+"' target='_blank' rel='noreferrer'>📥 下载</a>" if dl_href_local else ""}
-      <a class="inst-btn inst-remote alt" href="{dl_href_remote}" target="_blank" rel="noreferrer">🌐 原始地址</a>
       {"<span class='meta-badge' title='打印盘数'>🧩 "+str(plate_cnt)+" 盘</span>" if plate_cnt else ""}
     </div>
     {"<div>发布于 "+publish+"</div>" if publish else ""}
@@ -1268,24 +1280,13 @@ def rebuild_once(meta_path: Path):
         url = inst.get("downloadUrl")
         if not url:
             continue
-        title = inst.get("title") or inst.get("name") or str(inst.get("id"))
-        base_fn = sanitize_filename(title) or str(inst.get("id") or "model")
-        fn = base_fn + ".3mf"
+        fn = pick_instance_filename(inst, inst.get("name") or "")
         dest = instances_dir / fn
-
-        if dest.exists():
-            i = 2
-            while True:
-                cand = instances_dir / f"{base_fn}_{i}.3mf"
-                if not cand.exists():
-                    dest = cand
-                    break
-                i += 1
 
         download_file(REBUILD_SESSION, url, dest)
         inst_files.append({
             "id": inst.get("id"),
-            "title": title,
+            "title": inst.get("title") or inst.get("name") or str(inst.get("id")),
             "file": dest.name,
         })
 
@@ -1367,7 +1368,12 @@ def archive_model(url: str, cookie: str, download_dir: Path, logs_dir: Path, log
     inst_list = []
     for inst in design.get("instances", []) or []:
         plates, pics = collect_instance_media(inst, sess, images_dir, base_name)
-        name3mf, url3mf = fetch_instance_3mf(sess, inst.get("id"), raw_cookie_header)
+        name3mf, url3mf = fetch_instance_3mf(
+            sess,
+            inst.get("id"),
+            raw_cookie_header,
+            inst.get("apiUrl"),
+        )
         inst_list.append({
             "id": inst.get("id"),
             "profileId": inst.get("profileId"),

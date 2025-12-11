@@ -23,6 +23,8 @@
     .status-bad { color:#d32f2f; font-weight:600; }
     .btn-delete { padding:4px 8px; background:#d32f2f; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
     .btn-delete:hover { background:#b71c1c; }
+    .btn-secondary { padding:8px 12px; background:#455a64; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+    .btn-secondary:hover { background:#324048; }
     .links { text-align:right; }
     .links a { margin-left:12px; color:#1976d2; text-decoration:none; }
   </style>
@@ -68,6 +70,10 @@
 
   <div class="section">
     <h3>缺失 3MF 记录</h3>
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <div class="muted">重新获取实例下载地址需要最新 Cookie，请先在上方更新后再执行。</div>
+      <button class="btn-secondary" onclick="retryMissing()">重新下载缺失 3MF</button>
+    </div>
     <div id="missingBox"></div>
   </div>
 </div>
@@ -111,6 +117,22 @@ async function startArchive(){
     const err = await res.text();
     appendLog('归档失败: '+err);
     alert('归档失败');
+  }
+}
+
+async function retryMissing(){
+  if(!confirm('请先更新 Cookie，是否开始重新下载缺失 3MF 记录？')) return;
+  appendLog('开始重新下载缺失 3MF...');
+  const res = await fetch('/api/logs/missing-3mf/redownload',{method:'POST'});
+  if(res.ok){
+    const data = await res.json();
+    appendLog(`重新下载完成，成功 ${data.success}/${data.processed}，失败 ${data.failed}`);
+    alert(`重新下载完成，成功 ${data.success}/${data.processed}，失败 ${data.failed}`);
+    loadMissing();
+  }else{
+    const err = await res.text();
+    appendLog('重试失败: '+err);
+    alert('下载失败: '+err);
   }
 }
 
