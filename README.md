@@ -10,18 +10,31 @@
 - Docker 支持，开箱运行
 
 ## 目录结构
-- `config.json`：基础配置（下载目录、cookie 文件、日志目录）
-- `cookie.txt`：存放最新 Cookie（手动或 API 设置）
-- `logs/`：`app.log`、`missing_3mf.log`、`cookie.log`
-- `data/`：默认下载目录，每个模型一个 `MW_*/` 子目录（含 `meta.json/index.html/images/instances`）
-- `server.py`：FastAPI 入口
-- `archiver.py`：采集/归档核心逻辑
-- `templates/`：前端页面（gallery/config）
-- `requirements.txt`：依赖
+```
+0.mw_archive/
+├─ app/                  # 主程序（Docker 仅复制此目录）
+│  ├─ archiver.py        # 采集/归档核心
+│  ├─ server.py          # FastAPI 入口
+│  ├─ config.json        # 默认 ./data ./logs ./cookie.txt
+│  ├─ cookie.txt         # 当前 Cookie（可挂载覆盖）
+│  ├─ requirements.txt   # 依赖
+│  ├─ templates/         # 前端页面（gallery/config）
+│  ├─ imgs/              # 前端资源
+│  ├─ data/              # 归档输出（建议挂载）
+│  └─ logs/              # 运行日志、缺失记录（建议挂载）
+├─ others/               # 历史资料
+│  ├─ tampermonkey/      # 旧油猴脚本
+│  ├─ mw_fetch/          # 单文件 Python 采集脚本
+│  └─ index_only/        # 单页面导航/示例
+├─ Dockerfile            # 基于 app/ 构建镜像
+├─ docker_build.sh       # 简单构建脚本
+├─ .gitignore
+└─ README.md
+```
 
 ## 快速启动（本地）
 ```bash
-cd app2
+cd app
 python -m venv .venv
 . .venv/Scripts/activate  # Windows
 pip install -r requirements.txt
@@ -53,21 +66,18 @@ python server.py  # 默认 0.0.0.0:8000
 - 采集阶段若实例未拿到 downloadUrl，则写入 `logs/missing_3mf.log`，状态默认 `cookie失效`
 - 重试成功会更新 `meta.json`、下载到 `instances/`，并清理对应缺失记录
 
-## Cookie 提示
-- 请从模型详情页请求里复制完整 Cookie（包含 cf_clearance 等防护字段），粘贴到配置页或调用 `/api/cookie`
-
 ## Docker 部署
 ```bash
-cd app2
+# 在项目根目录（包含 Dockerfile 和 app/）
 docker build -t mw-archiver:latest .
 docker run -d \
   -p 8000:8000 \
-  -v $PWD/data:/app/data \
-  -v $PWD/logs:/app/logs \
-  -v $PWD/cookie.txt:/app/cookie.txt \
+  -v $PWD/app/data:/app/data \
+  -v $PWD/app/logs:/app/logs \
+  -v $PWD/app/cookie.txt:/app/cookie.txt \
   --name mw-archiver mw-archiver
 ```
-- 可通过挂载/修改 `config.json` 调整下载目录、日志目录、cookie 文件路径
+- 如需自定义下载/日志目录，修改 `app/config.json`，并相应调整挂载路径
 
 ## 更新日志
 - 2025-12-11 v2.1
