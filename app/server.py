@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from archiver import archive_model, download_file, fetch_instance_3mf, parse_coo
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
+GALLERY_FLAGS_PATH = BASE_DIR / "gallery_flags.json"
 DEFAULT_CONFIG = {
     "download_dir": "./data",
     "cookie_file": "./cookie.txt",
@@ -60,6 +62,27 @@ def load_config():
     Path(cfg["download_dir"]).mkdir(parents=True, exist_ok=True)
     Path(cfg["logs_dir"]).mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def load_gallery_flags() -> dict:
+    if GALLERY_FLAGS_PATH.exists():
+        try:
+            data = json.loads(GALLERY_FLAGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    favorites = data.get("favorites") if isinstance(data.get("favorites"), list) else []
+    printed = data.get("printed") if isinstance(data.get("printed"), list) else []
+    return {"favorites": favorites, "printed": printed}
+
+
+def save_gallery_flags(flags: dict):
+    data = {
+        "favorites": list(dict.fromkeys(flags.get("favorites") or [])),
+        "printed": list(dict.fromkeys(flags.get("printed") or [])),
+    }
+    GALLERY_FLAGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def read_cookie(cfg) -> str:
@@ -434,6 +457,7 @@ app.add_middleware(
 CFG = load_config()
 
 
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/files", StaticFiles(directory=CFG["download_dir"], html=True), name="files")
 
 
@@ -567,6 +591,46 @@ async def api_delete_missing(index: int):
 @app.get("/api/gallery")
 async def api_gallery():
     return scan_gallery(CFG)
+
+
+@app.get("/api/gallery/flags")
+async def api_gallery_flags():
+    return load_gallery_flags()
+
+
+@app.post("/api/gallery/flags")
+async def api_save_gallery_flags(body: dict):
+    favorites = body.get("favorites") if isinstance(body, dict) else []
+    printed = body.get("printed") if isinstance(body, dict) else []
+    favorites_list = [str(x) for x in favorites] if isinstance(favorites, list) else []
+    printed_list = [str(x) for x in printed] if isinstance(printed, list) else []
+    save_gallery_flags({"favorites": favorites_list, "printed": printed_list})
+    return {"status": "ok"}
+
+
+@app.post("/api/models/{model_dir}/delete")
+async def api_delete_model(model_dir: str):
+    if not model_dir or "/" in model_dir or "\\" in model_dir:
+        raise HTTPException(400, "model_dir 无效")
+    if not model_dir.startswith("MW_"):
+        raise HTTPException(400, "仅允许删除 MW_* 目录")
+    root = Path(CFG["download_dir"]).resolve()
+    target = (root / model_dir).resolve()
+    if not str(target).startswith(str(root)):
+        raise HTTPException(400, "路径越界")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(404, "目录不存在")
+    try:
+        shutil.rmtree(target)
+    except Exception as e:
+        logger.exception("删除目录失败")
+        raise HTTPException(500, f"删除失败: {e}")
+
+    flags = load_gallery_flags()
+    flags["favorites"] = [x for x in flags.get("favorites", []) if x != model_dir]
+    flags["printed"] = [x for x in flags.get("printed", []) if x != model_dir]
+    save_gallery_flags(flags)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
