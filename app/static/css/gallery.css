@@ -45,6 +45,76 @@ a.btn{
   box-shadow: 0 12px 25px rgba(37,99,235,0.22);
 }
 a.btn:active{ transform: translateY(1px); }
+button.btn{
+  padding:10px 14px;
+  background: linear-gradient(135deg, var(--primary), var(--primary2));
+  color:#fff;
+  border-radius: 12px;
+  border: none;
+  font-weight:600;
+  box-shadow: 0 12px 25px rgba(37,99,235,0.22);
+  cursor:pointer;
+}
+button.btn:active{ transform: translateY(1px); }
+.btn-secondary{
+  background: linear-gradient(135deg, #64748b, #475569);
+  box-shadow: 0 12px 25px rgba(71,85,105,0.25);
+}
+.header-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.layout{
+  display:grid;
+  grid-template-columns: 180px 1fr;
+  gap:16px;
+  align-items:start;
+}
+.content{
+  min-width: 0;
+}
+.sidebar{
+  position: sticky;
+  top: 88px;
+  align-self:start;
+}
+.side-card{
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(229,231,235,0.9);
+  border-radius: var(--radius);
+  padding:12px;
+  box-shadow: 0 10px 25px rgba(15,23,42,0.06);
+}
+.side-title{
+  font-size:13px;
+  color:var(--muted);
+  margin-bottom:10px;
+}
+.side-menu{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.side-item{
+  border:1px solid var(--border);
+  background:#fff;
+  border-radius:12px;
+  padding:8px 10px;
+  font-size:13px;
+  cursor:pointer;
+  text-align:left;
+  color:#1f2937;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease, color .15s ease;
+}
+.side-item:hover{ transform: translateY(-1px); border-color:#cbd5e1; }
+.side-item.active{
+  background: linear-gradient(135deg, var(--primary), var(--primary2));
+  color:#fff;
+  border-color: transparent;
+  box-shadow: 0 12px 25px rgba(37,99,235,0.22);
+}
 
 .search{
   margin-bottom:14px;
@@ -215,6 +285,14 @@ input[type=text]:focus{
   .view-btn{ padding:10px 12px; font-size:14px; border-radius:12px; }
   .pagination button{ padding:6px 8px; }
   .grid { gap:12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+}
+@media (max-width: 900px){
+  .layout{ grid-template-columns: 1fr; }
+  .sidebar{ position: static; }
+  .side-menu{ flex-direction: row; flex-wrap: wrap; }
+  .side-item{ text-align:center; }
+  .header-actions{ width:100%; flex-direction:column; align-items:stretch; }
+  button.btn{ width:100%; }
 }
 
 /* Hover overlay on image */

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>MakerWorld 归档控制台</title>
   <link rel="icon" href="/files/imgs/fav.ico">
+  <link rel="stylesheet" href="/static/css/manual_import.css">
   <style>
     body { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; margin:0; padding:0; background:#f4f6f8; color:#222; }
     .wrap { max-width: 960px; margin: 32px auto; background:#fff; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:24px 28px; }
@@ -26,13 +27,16 @@
     .btn-delete:hover { background:#b71c1c; }
     .btn-secondary { padding:8px 12px; background:#455a64; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
     .btn-secondary:hover { background:#324048; }
-    .links { text-align:right; }
-    .links a { margin-left:12px; color:#1976d2; text-decoration:none; }
+    .links { text-align:right; display:flex; justify-content:flex-end; gap:10px; align-items:center; }
+    .links a { color:#1976d2; text-decoration:none; }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="links"><a href="/">模型库</a></div>
+  <div class="links">
+    <button class="btn-secondary" type="button" data-manual-import-open>手动导入</button>
+    <a href="/">模型库</a>
+  </div>
   <h1>MakerWorld 归档控制台 <span style="font-size:14px;color:#666;">V2.1</span></h1>
   <div class="muted">配置 Cookie 和下载目录，输入模型链接一键归档，支持查看缺失 3MF 列表。</div>
 
@@ -76,6 +80,65 @@
       <button class="btn-secondary" onclick="retryMissing()">重新下载缺失 3MF</button>
     </div>
     <div id="missingBox"></div>
+  </div>
+</div>
+
+<div id="manualImportModal" class="manual-modal" aria-hidden="true">
+  <div class="manual-modal__inner" role="dialog" aria-modal="true" aria-labelledby="manualImportTitle">
+    <div class="manual-modal__header">
+      <div id="manualImportTitle" class="manual-modal__title">手动导入模型</div>
+      <button class="manual-modal__close" type="button" data-manual-import-close>×</button>
+    </div>
+    <form id="manualImportForm" class="manual-form">
+      <div class="manual-grid">
+        <div>
+          <label>模型名称</label>
+          <input type="text" name="title" required>
+        </div>
+        <div>
+          <label>模型地址</label>
+          <input type="text" name="modelLink" placeholder="https://example.com/model">
+        </div>
+        <div>
+          <label>模型来源</label>
+          <input type="text" name="sourceLink" placeholder="https://example.com">
+        </div>
+      </div>
+      <div class="manual-row">
+        <label>模型介绍</label>
+        <textarea name="summary" rows="4" placeholder="填写模型介绍..."></textarea>
+      </div>
+      <div class="manual-row">
+        <label>标签 (空格分隔)</label>
+        <input type="text" name="tags" placeholder="配件 打印支架 原创">
+      </div>
+      <div class="manual-row">
+        <label>封面图片</label>
+        <input type="file" name="cover" accept="image/*">
+      </div>
+      <div class="manual-row">
+        <label>设计图片 (多选)</label>
+        <input type="file" name="design_images" accept="image/*" multiple>
+      </div>
+      <div class="manual-row">
+        <label>实例文件</label>
+        <div class="manual-inline">
+          <button class="manual-btn" type="button" id="manualAddInstance">添加实例文件</button>
+          <span class="manual-help">可多次添加</span>
+        </div>
+        <input type="file" id="manualInstancePicker" accept=".3mf" multiple style="display:none">
+        <div id="instanceDescList" class="file-desc-list"></div>
+      </div>
+      <div class="manual-row">
+        <label>附件文件 (多选)</label>
+        <input type="file" name="attachments" multiple>
+      </div>
+      <div class="manual-actions">
+        <button class="manual-btn" type="button" data-manual-import-close>取消</button>
+        <button class="manual-btn primary" type="submit" id="manualImportSubmit">保存</button>
+      </div>
+      <div class="manual-msg" id="manualImportMsg"></div>
+    </form>
   </div>
 </div>
 
@@ -166,5 +229,6 @@ async function loadMissing(){
 loadConfig();
 loadMissing();
 </script>
+<script src="/static/js/manual_import.js" defer></script>
 </body>
 </html>

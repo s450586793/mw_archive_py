@@ -1005,6 +1005,11 @@ def build_instance_html(inst, assets):
         if imgs:
             pics_html = '<div class="thumbs">' + "".join(imgs) + "</div>"
 
+    hide_inst_stats = bool(assets.get("hide_inst_stats"))
+    stats_html = ""
+    if not hide_inst_stats:
+        stats_html = f'<div class="inst-meta"><span class="meta-item" title="下载次数">⬇️ {dls}</span><span class="meta-item" title="打印次数">🖨️ {prints}</span><span class="meta-item" title="预计打印时间">⏱️ {time_str}</span><span class="meta-item" title="重量">⚖️ {weight} g</span></div>'
+
     return f"""
 <div class="inst-card">
   <div class="inst-meta">
@@ -1015,7 +1020,7 @@ def build_instance_html(inst, assets):
     </div>
     {"<div>发布于 "+publish+"</div>" if publish else ""}
   </div>
-  <div class="inst-meta"><span class="meta-item" title="下载次数">⬇️ {dls}</span><span class="meta-item" title="打印次数">🖨️ {prints}</span><span class="meta-item" title="预计打印时间">⏱️ {time_str}</span><span class="meta-item" title="重量">⚖️ {weight} g</span></div>
+  {stats_html}
   {"<div class='chips'>"+chips_html+"</div>" if chips_html else ""}
   {pics_html}
   {plates_html}
@@ -1091,6 +1096,8 @@ def build_index_html(meta: dict, assets: dict) -> str:
     if view_count:
         stats_fragments.append(f"👀 {view_count}")
     stats_line = "　".join(stats_fragments)
+    hide_stats = bool(assets.get("hide_stats")) or meta.get("source") == "others"
+    stats_html = f'<div class="stats">\n    {stats_line}\n  </div>' if not hide_stats else ""
 
     origin_link = f'<a class="origin-link" href="{url}" target="_blank" rel="noreferrer">原文链接</a>' if url else ""
     avatar_html = f'<img class="avatar" src="{avatar_src}" alt="avatar">' if avatar_src else ""
@@ -1131,9 +1138,7 @@ def build_index_html(meta: dict, assets: dict) -> str:
   <img class="hero" src="{hero_src}" alt="screenshot">
   {collected_div}
 
-  <div class="stats">
-    {stats_line}
-  </div>
+  {stats_html}
 
   <div class="section-title">标签</div>
   <div class="tag-list">
@@ -1158,7 +1163,7 @@ def build_index_html(meta: dict, assets: dict) -> str:
   <div class="section-title">附件</div>
   <div class="attachments">
     <div class="attach-upload">
-      <input type="file" id="attachInput">
+      <input type="file" id="attachInput" multiple>
       <button class="attach-btn" type="button" id="attachUploadBtn">上传附件</button>
       <span class="attach-msg" id="attachMsg"></span>
     </div>
@@ -1331,9 +1336,9 @@ def build_index_html(meta: dict, assets: dict) -> str:
   loadList();
 
   if (!btnEl || !inputEl) return;
-  btnEl.addEventListener('click', () => {{
-    const file = inputEl.files && inputEl.files[0];
-    if (!file) {{
+  btnEl.addEventListener('click', async () => {{
+    const files = inputEl.files ? Array.from(inputEl.files) : [];
+    if (!files.length) {{
       setMsg('请选择附件', true);
       return;
     }}
@@ -1341,26 +1346,31 @@ def build_index_html(meta: dict, assets: dict) -> str:
       setMsg('请通过本地服务打开页面以便上传', true);
       return;
     }}
-    const fd = new FormData();
-    fd.append('file', file);
     btnEl.disabled = true;
-    setMsg('上传中...');
-    fetch('/api/models/' + encodeURIComponent(modelDir) + '/attachments', {{
-      method: 'POST',
-      body: fd,
-    }})
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-      .then(() => {{
-        inputEl.value = '';
-        setMsg('上传成功');
-        loadList();
-      }})
-      .catch(() => {{
-        setMsg('上传失败', true);
-      }})
-      .finally(() => {{
-        btnEl.disabled = false;
-      }});
+    let success = 0;
+    let failed = 0;
+    setMsg(`上传中... (0/${{files.length}})`);
+    for (const file of files) {{
+      const fd = new FormData();
+      fd.append('file', file);
+      try {{
+        const res = await fetch('/api/models/' + encodeURIComponent(modelDir) + '/attachments', {{
+          method: 'POST',
+          body: fd,
+        }});
+        if (!res.ok) throw new Error('upload failed');
+        success += 1;
+      }} catch (e) {{
+        failed += 1;
+      }}
+      setMsg(`上传中... (${{success + failed}}/${{files.length}})`);
+    }}
+    inputEl.value = '';
+    loadList();
+    if (failed === 0) setMsg('上传成功');
+    else if (success === 0) setMsg('上传失败', true);
+    else setMsg(`部分成功 ${{success}}/${{files.length}}`, true);
+    btnEl.disabled = false;
   }});
 }})();
 </script>

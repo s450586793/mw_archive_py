@@ -3,18 +3,27 @@ import logging
 import re
 import shutil
 import sys
+from html import escape as escape_html
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from archiver import archive_model, download_file, fetch_instance_3mf, parse_cookies, sanitize_filename
+from archiver import (
+    STYLE_CSS,
+    archive_model,
+    build_index_html,
+    download_file,
+    fetch_instance_3mf,
+    parse_cookies,
+    sanitize_filename,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -51,8 +60,8 @@ def strip_html(value: str) -> str:
 def resolve_model_dir(model_dir: str) -> Path:
     if not model_dir or "/" in model_dir or "\\" in model_dir:
         raise HTTPException(400, "model_dir 无效")
-    if not model_dir.startswith("MW_"):
-        raise HTTPException(400, "仅允许 MW_* 目录")
+    if not (model_dir.startswith("MW_") or model_dir.startswith("Others_")):
+        raise HTTPException(400, "仅允许 MW_* 或 Others_* 目录")
     root = Path(CFG["download_dir"]).resolve()
     target = (root / model_dir).resolve()
     if not str(target).startswith(str(root)):
@@ -60,6 +69,74 @@ def resolve_model_dir(model_dir: str) -> Path:
     if not target.exists() or not target.is_dir():
         raise HTTPException(404, "目录不存在")
     return target
+
+
+def ensure_unique_path(dest: Path) -> Path:
+    if not dest.exists():
+        return dest
+    stem = dest.stem or "file"
+    suffix = dest.suffix
+    idx = 1
+    while True:
+        candidate = dest.with_name(f"{stem}_{idx}{suffix}")
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def save_upload_file(upload: UploadFile, dest: Path):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(upload.file, f)
+
+
+def pick_ext(filename: str, fallback: str) -> str:
+    suffix = Path(filename).suffix if filename else ""
+    if suffix and not suffix.startswith("."):
+        suffix = "." + suffix
+    return suffix if suffix else fallback
+
+
+def parse_instance_descs(raw: str) -> List[str]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item or "") for item in data]
+
+
+def make_summary_payload(text: str, summary_files: List[str]) -> dict:
+    clean_text = (text or "").strip()
+    parts = []
+    if clean_text:
+        safe_text = escape_html(clean_text).replace("\n", "<br>")
+        parts.append(f"<p>{safe_text}</p>")
+    for idx, name in enumerate(summary_files, start=1):
+        parts.append(f'<img src="./images/{name}" alt="summary {idx}">')
+    html = "\n".join(parts)
+    summary_text = " ".join(clean_text.split())
+    return {"raw": html, "html": html, "text": summary_text}
+
+
+def build_others_dir(title: str) -> tuple[str, Path]:
+    safe_title = sanitize_filename(title).strip() or "model"
+    date_stamp = datetime.now().strftime("%Y%m%d")
+    base_name = f"Others_{safe_title}_{date_stamp}"
+    root = Path(CFG["download_dir"]).resolve()
+    candidate = root / base_name
+    if not candidate.exists():
+        return base_name, candidate
+    idx = 1
+    while True:
+        name = f"{base_name}_{idx}"
+        candidate = root / name
+        if not candidate.exists():
+            return name, candidate
+        idx += 1
 
 
 # ---------- 配置与持久化 ----------
@@ -442,6 +519,43 @@ def scan_gallery(cfg) -> List[dict]:
                 "id": data.get("id"),
                 "cover": cover_file,
                 "dir": d.name,
+                "source": "makerworld",
+                "tags": data.get("tags") or [],
+                "summary": strip_html(raw_summary),
+                "author": {
+                    "name": author.get("name"),
+                    "url": author.get("url"),
+                    "avatarRelPath": author.get("avatarRelPath"),
+                },
+                "stats": data.get("stats") or {},
+                "instanceCount": len(instances),
+                "publishedAt": published_at,
+                "collectedAt": collected_at,
+            })
+        except Exception:
+            continue
+    for d in root.glob("Others_*"):
+        meta = d / "meta.json"
+        if not meta.exists():
+            continue
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            images = data.get("images") or {}
+            cover_name = images.get("cover") or ""
+            cover_file = (d / "images" / cover_name).name if cover_name else ""
+            summary_data = data.get("summary") or {}
+            raw_summary = summary_data.get("text") or summary_data.get("raw") or summary_data.get("html") or ""
+            instances = data.get("instances") or []
+            published_at = None
+            author = data.get("author") or {}
+            collected_at = datetime.fromtimestamp(meta.stat().st_mtime).isoformat()
+            items.append({
+                "baseName": data.get("baseName") or d.name,
+                "title": data.get("title"),
+                "id": data.get("id"),
+                "cover": cover_file,
+                "dir": d.name,
+                "source": "others",
                 "tags": data.get("tags") or [],
                 "summary": strip_html(raw_summary),
                 "author": {
@@ -660,6 +774,190 @@ async def api_upload_attachment(model_dir: str, file: UploadFile = File(...)):
         logger.exception("附件保存失败")
         raise HTTPException(500, f"附件保存失败: {e}")
     return {"status": "ok", "file": dest.name}
+
+
+@app.post("/api/models/manual")
+async def api_manual_import(
+    title: str = Form(...),
+    modelLink: str = Form(""),
+    sourceLink: str = Form(""),
+    summary: str = Form(""),
+    tags: str = Form(""),
+    cover: Optional[UploadFile] = File(None),
+    design_images: List[UploadFile] = File([]),
+    instance_files: List[UploadFile] = File([]),
+    instance_pictures: List[UploadFile] = File([]),
+    attachments: List[UploadFile] = File([]),
+    instance_descs: str = Form(""),
+    instance_picture_counts: str = Form(""),
+):
+    name = (title or "").strip()
+    if not name:
+        raise HTTPException(400, "模型名称不能为空")
+
+    base_name, model_dir = build_others_dir(name)
+    images_dir = model_dir / "images"
+    instances_dir = model_dir / "instances"
+    files_dir = model_dir / "file"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    instances_dir.mkdir(parents=True, exist_ok=True)
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    design_names: List[str] = []
+    summary_names: List[str] = []
+    cover_name = ""
+
+    if cover and cover.filename:
+        ext = pick_ext(cover.filename, ".jpg")
+        cover_name = f"cover{ext}"
+        save_upload_file(cover, images_dir / cover_name)
+
+    for idx, upload in enumerate(design_images, start=1):
+        if not upload or not upload.filename:
+            continue
+        ext = pick_ext(upload.filename, ".jpg")
+        fname = f"design_{idx:02d}{ext}"
+        save_upload_file(upload, images_dir / fname)
+        design_names.append(fname)
+
+    if not cover_name and design_names:
+        cover_name = design_names[0]
+    if not cover_name and summary_names:
+        cover_name = summary_names[0]
+    if cover_name and not design_names:
+        design_names = [cover_name]
+
+    desc_list = parse_instance_descs(instance_descs)
+    try:
+        pic_counts_raw = json.loads(instance_picture_counts) if instance_picture_counts else []
+    except Exception:
+        pic_counts_raw = []
+    pic_counts = []
+    if isinstance(pic_counts_raw, list):
+        for item in pic_counts_raw:
+            try:
+                pic_counts.append(max(int(item), 0))
+            except Exception:
+                pic_counts.append(0)
+    pic_offset = 0
+    instances = []
+    for idx, upload in enumerate(instance_files, start=1):
+        if not upload or not upload.filename:
+            continue
+        safe_name = sanitize_filename(Path(upload.filename).name)
+        if not safe_name:
+            safe_name = f"instance_{idx}.3mf"
+        stem = Path(safe_name).stem or f"instance_{idx}"
+        suffix = pick_ext(safe_name, ".3mf")
+        dest = ensure_unique_path(instances_dir / f"{stem}{suffix}")
+        save_upload_file(upload, dest)
+        inst_title = dest.stem
+        inst_summary = desc_list[idx - 1] if (idx - 1) < len(desc_list) else ""
+        pics = []
+        wanted = pic_counts[idx - 1] if (idx - 1) < len(pic_counts) else 0
+        for pic_idx in range(1, wanted + 1):
+            if pic_offset >= len(instance_pictures):
+                break
+            pic_upload = instance_pictures[pic_offset]
+            pic_offset += 1
+            if not pic_upload or not pic_upload.filename:
+                continue
+            ext = pick_ext(pic_upload.filename, ".jpg")
+            fname = f"inst{idx:02d}_pic_{pic_idx:02d}{ext}"
+            save_upload_file(pic_upload, images_dir / fname)
+            pics.append({
+                "index": pic_idx,
+                "url": "",
+                "relPath": f"images/{fname}",
+                "fileName": fname,
+                "isRealLifePhoto": 0,
+            })
+        instances.append({
+            "id": idx,
+            "title": inst_title,
+            "summary": inst_summary,
+            "name": dest.name,
+            "downloadCount": 0,
+            "printCount": 0,
+            "plates": [],
+            "pictures": pics,
+            "instanceFilaments": [],
+        })
+
+    for upload in attachments:
+        if not upload or not upload.filename:
+            continue
+        safe_name = sanitize_filename(Path(upload.filename).name) or "attachment"
+        dest = ensure_unique_path(files_dir / safe_name)
+        save_upload_file(upload, dest)
+
+    tag_list = [t for t in re.split(r"\s+", (tags or "").strip()) if t]
+    summary_payload = make_summary_payload(summary, summary_names)
+    author_url = (sourceLink or modelLink or "").strip()
+    meta = {
+        "baseName": base_name,
+        "source": "others",
+        "url": (modelLink or sourceLink or "").strip(),
+        "id": None,
+        "slug": "",
+        "title": name,
+        "titleTranslated": "",
+        "coverUrl": "",
+        "tags": tag_list,
+        "tagsOriginal": tag_list,
+        "stats": {"likes": 0, "favorites": 0, "downloads": 0, "prints": 0, "views": 0},
+        "cover": {
+            "url": "",
+            "localName": cover_name,
+            "relPath": f"images/{cover_name}" if cover_name else "",
+        },
+        "author": {
+            "name": "手动导入",
+            "url": author_url,
+            "avatarUrl": "",
+            "avatarLocal": "",
+            "avatarRelPath": "",
+        },
+        "images": {
+            "cover": cover_name,
+            "design": design_names,
+            "summary": summary_names,
+        },
+        "designImages": [
+            {"index": idx, "originalUrl": "", "relPath": f"images/{fname}", "fileName": fname}
+            for idx, fname in enumerate(design_names, start=1)
+        ],
+        "summaryImages": [
+            {"index": idx, "originalUrl": "", "relPath": f"images/{fname}", "fileName": fname}
+            for idx, fname in enumerate(summary_names, start=1)
+        ],
+        "summary": summary_payload,
+        "instances": instances,
+        "generatedAt": Path().absolute().as_posix(),
+        "note": "本文件包含结构化数据与打印配置详情。",
+    }
+
+    meta_path = model_dir / "meta.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    hero_file = cover_name or (design_names[0] if design_names else (summary_names[0] if summary_names else ""))
+    hero_rel = f"./images/{hero_file}" if hero_file else "screenshot.png"
+    assets = {
+        "design_files": design_names,
+        "hero": hero_rel,
+        "avatar": None,
+        "collected_date": datetime.now().strftime("%Y-%m-%d"),
+        "instance_files": [],
+        "base_name": base_name,
+        "hide_stats": True,
+        "hide_inst_stats": True,
+    }
+    (model_dir / "style.css").write_text(STYLE_CSS, encoding="utf-8")
+    index_html = build_index_html(meta, assets)
+    (model_dir / "index.html").write_text(index_html, encoding="utf-8")
+
+    logger.info("手动导入模型完成: %s", model_dir)
+    return {"status": "ok", "base_name": base_name, "work_dir": str(model_dir.resolve())}
 
 
 @app.post("/api/models/{model_dir}/delete")

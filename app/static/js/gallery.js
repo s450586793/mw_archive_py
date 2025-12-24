@@ -1,6 +1,7 @@
 let models = [];
 let activeTag = "";
 let activeAuthor = "";
+let activeSource = "";
 let onlyFavorites = false;
 let onlyPrinted = false;
 let currentPage = 1;
@@ -19,6 +20,7 @@ const statBlueprint = [
 const kwInput = document.getElementById("kw");
 const filterChips = document.getElementById("filterChips");
 const authorChips = document.getElementById("authorChips");
+const sourceMenu = document.getElementById("sourceMenu");
 const clearBtn = document.getElementById("clearBtn");
 const paginationWrap = document.getElementById("pagination");
 const favOnlyBtn = document.getElementById("favOnlyBtn");
@@ -102,6 +104,23 @@ function selectAuthor(name){
   currentPage = 1;
   renderFilters();
   renderAuthorFilters();
+  render();
+}
+
+function getSourceValue(m){
+  if(m && m.source) return m.source;
+  const dir = m?.dir || "";
+  return dir.startsWith("Others_") ? "others" : "makerworld";
+}
+
+function formatSourceLabel(value){
+  return value === "others" ? "Others" : "MakerWorld";
+}
+
+function selectSource(source){
+  activeSource = source;
+  currentPage = 1;
+  renderSourceMenu();
   render();
 }
 
@@ -196,6 +215,7 @@ function deleteModel(m){
       currentPage = 1;
       renderFilters();
       renderAuthorFilters();
+      renderSourceMenu();
       render();
     })
     .catch((e) => {
@@ -215,6 +235,7 @@ async function load(){
   }
   renderFilters();
   renderAuthorFilters();
+  renderSourceMenu();
   syncFlagFilterButtons();
   updatePageSize();
   currentPage = 1;
@@ -292,6 +313,36 @@ function renderAuthorFilters(){
     });
     authorChips.appendChild(moreBtn);
   }
+}
+
+function renderSourceMenu(){
+  if(!sourceMenu) return;
+  const counts = {};
+  models.forEach(m => {
+    const key = getSourceValue(m);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const total = models.length || 0;
+  const labels = { makerworld: "MakerWorld", others: "Others" };
+  const order = ["makerworld", "others"];
+  sourceMenu.innerHTML = "";
+
+  const allBtn = document.createElement("button");
+  allBtn.type = "button";
+  allBtn.className = "side-item" + (activeSource === "" ? " active" : "");
+  allBtn.textContent = `全部 (${total})`;
+  allBtn.addEventListener("click", () => selectSource(""));
+  sourceMenu.appendChild(allBtn);
+
+  order.forEach((key) => {
+    if(!(key in counts)) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "side-item" + (activeSource === key ? " active" : "");
+    btn.textContent = `${labels[key]} (${counts[key] || 0})`;
+    btn.addEventListener("click", () => selectSource(key));
+    sourceMenu.appendChild(btn);
+  });
 }
 
 function renderPagination(totalPages){
@@ -373,6 +424,9 @@ function render(){
   if(activeAuthor){
     list = list.filter(m => (m.author?.name || "未知作者") === activeAuthor);
   }
+  if(activeSource){
+    list = list.filter(m => getSourceValue(m) === activeSource);
+  }
   if(onlyFavorites){
     list = list.filter(m => favoriteSet.has(getModelKey(m)));
   }
@@ -394,6 +448,7 @@ function render(){
     if(activeTag) tips.push(`标签「${activeTag}」`);
     if(keyword) tips.push(`关键词「${kwInput.value.trim()}」`);
     if(activeAuthor) tips.push(`作者「${activeAuthor}」`);
+    if(activeSource) tips.push(`来源「${formatSourceLabel(activeSource)}」`);
     if(onlyFavorites) tips.push("收藏");
     if(onlyPrinted) tips.push("已打印");
     empty.textContent = tips.length ? `未找到匹配 ${tips.join("、")}` : "暂无模型";

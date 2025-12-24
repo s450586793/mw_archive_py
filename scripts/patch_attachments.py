@@ -7,7 +7,7 @@ ATTACH_HTML = """
   <div class="section-title">\u9644\u4ef6</div>
   <div class="attachments">
     <div class="attach-upload">
-      <input type="file" id="attachInput">
+      <input type="file" id="attachInput" multiple>
       <button class="attach-btn" type="button" id="attachUploadBtn">\u4e0a\u4f20\u9644\u4ef6</button>
       <span class="attach-msg" id="attachMsg"></span>
     </div>
@@ -86,9 +86,9 @@ ATTACH_JS = """
   loadList();
 
   if (!btnEl || !inputEl) return;
-  btnEl.addEventListener('click', () => {
-    const file = inputEl.files && inputEl.files[0];
-    if (!file) {
+  btnEl.addEventListener('click', async () => {
+    const files = inputEl.files ? Array.from(inputEl.files) : [];
+    if (!files.length) {
       setMsg('\u8bf7\u9009\u62e9\u9644\u4ef6', true);
       return;
     }
@@ -96,26 +96,31 @@ ATTACH_JS = """
       setMsg('\u8bf7\u901a\u8fc7\u672c\u5730\u670d\u52a1\u6253\u5f00\u9875\u9762\u4ee5\u4fbf\u4e0a\u4f20', true);
       return;
     }
-    const fd = new FormData();
-    fd.append('file', file);
     btnEl.disabled = true;
-    setMsg('\u4e0a\u4f20\u4e2d...');
-    fetch('/api/models/' + encodeURIComponent(modelDir) + '/attachments', {
-      method: 'POST',
-      body: fd,
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-      .then(() => {
-        inputEl.value = '';
-        setMsg('\u4e0a\u4f20\u6210\u529f');
-        loadList();
-      })
-      .catch(() => {
-        setMsg('\u4e0a\u4f20\u5931\u8d25', true);
-      })
-      .finally(() => {
-        btnEl.disabled = false;
-      });
+    let success = 0;
+    let failed = 0;
+    setMsg(`\u4e0a\u4f20\u4e2d... (0/${files.length})`);
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        const res = await fetch('/api/models/' + encodeURIComponent(modelDir) + '/attachments', {
+          method: 'POST',
+          body: fd,
+        });
+        if (!res.ok) throw new Error('upload failed');
+        success += 1;
+      } catch (e) {
+        failed += 1;
+      }
+      setMsg(`\u4e0a\u4f20\u4e2d... (${success + failed}/${files.length})`);
+    }
+    inputEl.value = '';
+    loadList();
+    if (failed === 0) setMsg('\u4e0a\u4f20\u6210\u529f');
+    else if (success === 0) setMsg('\u4e0a\u4f20\u5931\u8d25', true);
+    else setMsg(`\u90e8\u5206\u6210\u529f ${success}/${files.length}`, true);
+    btnEl.disabled = false;
   });
 })();
 """.strip("\n")
@@ -225,6 +230,23 @@ def insert_attachments_css(text: str) -> str | None:
     return text + nl + nl + block + nl
 
 
+def upgrade_attach_input(text: str) -> str:
+    pattern = re.compile(r'(<input[^>]*id="attachInput")(?![^>]*multiple)([^>]*>)')
+    return pattern.sub(r'\1 multiple\2', text)
+
+
+def upgrade_attachments_js(text: str) -> str:
+    pattern = re.compile(
+        r"\(function\(\)\s*\{\s*const listEl = document\.getElementById\('attachList'\);[\s\S]*?\}\)\(\);",
+        re.M,
+    )
+    if not pattern.search(text):
+        return text
+    nl = detect_newline(text)
+    block = ATTACH_JS.replace("\n", nl)
+    return pattern.sub(block, text, count=1)
+
+
 def patch_get_model_dir(text: str) -> str:
     text = text.replace("return parts[filesIdx + 1];", "return decodeURIComponent(parts[filesIdx + 1]);")
     text = text.replace("return parts[parts.length - 2];", "return decodeURIComponent(parts[parts.length - 2]);")
@@ -236,6 +258,8 @@ def patch_index(index_path: Path) -> bool:
     updated = insert_attachments_html(original) or original
     updated = insert_attachments_js(updated) or updated
     updated = patch_get_model_dir(updated)
+    updated = upgrade_attach_input(updated)
+    updated = upgrade_attachments_js(updated)
     if updated != original:
         index_path.write_text(updated, encoding="utf-8")
         return True
