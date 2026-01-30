@@ -573,6 +573,30 @@ function render(append = false) {
     }
     body.appendChild(statsWrap);
 
+    // Date Info
+    const dateInfo = document.createElement("div");
+    dateInfo.className = "card-dates";
+
+    if (m.publishedAt) {
+      const publishDate = document.createElement("span");
+      publishDate.className = "date-item";
+      publishDate.innerHTML = `<i class="far fa-calendar-alt"></i> ${formatDate(m.publishedAt)}`;
+      publishDate.title = `发布时间: ${new Date(m.publishedAt).toLocaleString('zh-CN')}`;
+      dateInfo.appendChild(publishDate);
+    }
+
+    if (m.collectedAt) {
+      const collectDate = document.createElement("span");
+      collectDate.className = "date-item";
+      collectDate.innerHTML = `<i class="fas fa-archive"></i> ${formatDate(m.collectedAt)}`;
+      collectDate.title = `采集时间: ${new Date(m.collectedAt).toLocaleString('zh-CN')}`;
+      dateInfo.appendChild(collectDate);
+    }
+
+    if (dateInfo.children.length > 0) {
+      body.appendChild(dateInfo);
+    }
+
     // Bottom Actions Row (PERSISTENT & ALWAYS VISIBLE)
     const actions = document.createElement("div");
     actions.className = "card-actions";
@@ -628,6 +652,15 @@ function createStatIcon(iconClass, count, title) {
 }
 
 function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function formatDate(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 if (kwInput) {
   kwInput.addEventListener("input", () => { displayedCount = loadIncrement; render(); });
@@ -685,6 +718,54 @@ if (printedOnlyBtn) {
   });
 }
 
+// Setup infinite scroll
+function setupInfiniteScroll() {
+  const content = document.querySelector('.content');
+  if (!content) return;
+
+  let isLoading = false;
+
+  content.addEventListener('scroll', () => {
+    if (isLoading) return;
+
+    const scrollTop = content.scrollTop;
+    const scrollHeight = content.scrollHeight;
+    const clientHeight = content.clientHeight;
+
+    // Load more when scrolled to 80% of content
+    if (scrollTop + clientHeight >= scrollHeight * 0.8) {
+      const list = getFilteredList();
+      const total = list.length;
+
+      if (displayedCount < total) {
+        isLoading = true;
+        displayedCount += loadIncrement;
+        render(true);
+        setTimeout(() => { isLoading = false; }, 300);
+      }
+    }
+  });
+}
+
+function updateLoadMoreIndicator(hasMore) {
+  const grid = document.getElementById("grid");
+  if (!grid) return;
+
+  let indicator = document.getElementById("loadMoreIndicator");
+  if (hasMore) {
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.id = "loadMoreIndicator";
+      indicator.className = "load-more-indicator";
+      indicator.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载更多...';
+      grid.parentElement.appendChild(indicator);
+    }
+    indicator.style.display = "block";
+  } else {
+    if (indicator) indicator.style.display = "none";
+  }
+}
+
 if (filterModal) {
   const closeBtn = filterModal.querySelector(".filter-modal__close");
   if (closeBtn) closeBtn.addEventListener("click", closeFilterModal);
@@ -740,3 +821,4 @@ if (lightbox) {
 }
 
 load();
+setupInfiniteScroll();

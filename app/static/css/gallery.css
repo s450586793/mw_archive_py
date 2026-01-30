@@ -384,6 +384,59 @@ header {
   font-size: 14px;
 }
 
+/* Colorful stat icons */
+.stat-chip i.fa-thumbs-up {
+  color: #f59e0b;
+  /* Orange for likes */
+}
+
+.stat-chip i.fa-star {
+  color: #eab308;
+  /* Yellow for favorites */
+}
+
+.stat-chip i.fa-print {
+  color: #8b5cf6;
+  /* Purple for prints */
+}
+
+.stat-chip i.fa-download {
+  color: #06b6d4;
+  /* Cyan for downloads */
+}
+
+/* Card Dates */
+.card-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.date-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.date-item i.fa-calendar-alt {
+  font-size: 13px;
+  color: #10b981;
+  width: 16px;
+  text-align: center;
+}
+
+.date-item i.fa-archive {
+  font-size: 13px;
+  color: #3b82f6;
+  width: 16px;
+  text-align: center;
+}
+
 /* Card Actions (Persistent) */
 .card-actions {
   display: flex;
