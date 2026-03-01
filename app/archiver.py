@@ -1191,17 +1191,29 @@ h1.title {
 }
 
 .inst-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-left: 6px;
   font-size: 12px;
   text-decoration: none;
   background: #1976d2;
   color: #fff;
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: none;
+  white-space: nowrap;
+  font-weight: bold;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .inst-btn.alt {
-  background: #6c757d;
+  background: #e53935;
+}
+
+.inst-btn.alt:hover {
+  background: #c62828;
 }
 
 .inst-btn:hover {
@@ -1281,7 +1293,6 @@ h1.title {
   object-fit: cover;
   border-radius: 6px;
   border: 2px solid transparent;
-  background: #000;
 }
 
 .thumbs img.active {
@@ -1539,11 +1550,11 @@ def build_instance_html(inst, assets):
 
     return f"""
 <div class="inst-card">
-  <div class="inst-meta">
-    <div>
+  <div class="inst-meta" style="flex-wrap: wrap; justify-content: space-between; margin-bottom: 8px;">
+    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
       <strong>{title}</strong>
-      {"<a class='inst-btn inst-local' href='"+dl_href_local+"' target='_blank' rel='noreferrer'>📥 下载</a>" if dl_href_local else ""}
       {"<span class='meta-badge' title='打印盘数'>🧩 "+str(plate_cnt)+" 盘</span>" if plate_cnt else ""}
+      {"<a class='inst-btn inst-local' href='"+dl_href_local+"' target='_blank' rel='noreferrer'>📥 下载</a>" if dl_href_local else ""}
     </div>
     {"<div>发布于 "+publish+"</div>" if publish else ""}
   </div>

@@ -253,6 +253,11 @@ body {
     border-color: var(--color-primary);
 }
 
+.thumbs img.inst-thumb {
+    opacity: 1;
+    /* override 0.6 opacity to remove gray mask in print config pictures */
+}
+
 /* 简介 */
 .summary-section {
     font-size: 15px;
@@ -484,10 +489,12 @@ body {
 .inst-actions {
     display: flex;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     width: 100%;
-    justify-content: flex-end;
-    overflow-x: auto;
+    /* Align buttons to left so a wrapped button aligns nicely with the upper ones */
+    justify-content: flex-start;
+    align-items: center;
+    /* Ensure vertical alignment is identical across buttons */
 }
 
 .inst-actions::-webkit-scrollbar {
@@ -521,6 +528,7 @@ body {
     background: var(--color-success);
     color: #fff;
     padding: 8px 16px;
+    border: none;
     border-radius: var(--radius-full);
     text-decoration: none;
     font-size: 14px;
@@ -530,12 +538,14 @@ body {
     white-space: nowrap;
     transition: all 0.2s ease;
     box-shadow: 0 4px 10px rgba(76, 175, 80, 0.3);
+    cursor: pointer;
+    font-family: inherit;
 }
 
 .inst-btn:hover {
     background: #388E3C;
     transform: translateY(-2px);
-    box-shadow: 0 6px 14px rgba(76, 175, 80, 0.4);
+    box-shadow: 0 4px 10px rgba(76, 175, 80, 0.4);
 }
 
 .inst-bambu {
@@ -546,6 +556,17 @@ body {
 .inst-bambu:hover {
     background: #008f88;
     box-shadow: 0 6px 14px rgba(0, 174, 165, 0.4);
+}
+
+.inst-details {
+    background: #e53935;
+    /* Red warning/detail color */
+    box-shadow: 0 4px 10px rgba(229, 57, 53, 0.3);
+}
+
+.inst-details:hover {
+    background: #c62828;
+    box-shadow: 0 6px 14px rgba(229, 57, 53, 0.4);
 }
 
 .inst-meta {
@@ -835,10 +856,13 @@ body {
 .modal-content {
     background: transparent;
     width: 90%;
-    max-width: 900px;
+    max-width: 800px;
+    aspect-ratio: 1 / 1;
+    /* 1:1 square ratio */
+    max-height: 85vh;
+    /* Ensure it fits on smaller screens */
     display: flex;
     flex-direction: row;
-    height: 80vh;
     gap: 20px;
 }
 
@@ -866,13 +890,14 @@ body {
 
 .modal-side-panel {
     background: #fff;
-    width: 100%;
-    max-width: 500px;
+    flex: 1;
+    /* let right side flexibly use remaining space in 1:1 modal */
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-width: 0;
 }
 
 .modal-header {

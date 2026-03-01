@@ -381,9 +381,9 @@
             '</span>' +
             '</div>' +
             (dlHrefLocal ? '<div class="inst-actions">' +
-                (platesDataHtml ? '<button class="inst-btn btn-outline" style="white-space: nowrap;" onclick="openPlatesModal(this)" data-plates="' + platesDataHtml + '"><i class="fas fa-list"></i> 详情</button>' : '') +
-                '<a class="inst-btn inst-bambu" style="white-space: nowrap;" href="bambustudio://open?file=' + bambuProxyUrl + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> 打印</a>' +
-                '<a class="inst-btn inst-local" style="white-space: nowrap;" href="' + dlHrefLocal + '" target="_blank" rel="noreferrer" title="下载资源"><i class="fas fa-download"></i> 下载</a>' +
+                (platesDataHtml ? '<button class="inst-btn inst-details" onclick="openPlatesModal(this)" data-plates="' + platesDataHtml + '"><i class="fas fa-list"></i> 详情</button>' : '') +
+                '<a class="inst-btn inst-bambu" href="bambustudio://open?file=' + bambuProxyUrl + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> 打印</a>' +
+                '<a class="inst-btn inst-local" href="' + dlHrefLocal + '" target="_blank" rel="noreferrer" title="下载资源"><i class="fas fa-download"></i> 下载</a>' +
                 '</div>' : '') +
             '</div>' +
             statsHtml +

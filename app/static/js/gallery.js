@@ -659,7 +659,8 @@ function createStatIcon(iconClass, count, title) {
 }
 
 function getModelDetailUrl(m) {
-  return useV2 ? `/v2/files/${m.dir}` : `/files/${m.dir}/index.html`;
+  var safeDir = encodeURIComponent(m.dir);
+  return useV2 ? `/v2/files/${safeDir}` : `/files/${safeDir}/index.html`;
 }
 
 function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

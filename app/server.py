@@ -63,12 +63,27 @@ def resolve_model_dir(model_dir: str) -> Path:
         raise HTTPException(400, "model_dir 无效")
     if not (model_dir.startswith("MW_") or model_dir.startswith("Others_")):
         raise HTTPException(400, "仅允许 MW_* 或 Others_* 目录")
+    
     root = Path(CFG["download_dir"]).resolve()
     target = (root / model_dir).resolve()
+    
     if not str(target).startswith(str(root)):
         raise HTTPException(400, "路径越界")
+        
     if not target.exists() or not target.is_dir():
+        # Fallback for Windows trailing space issues
+        stripped_name = model_dir.strip()
+        fallback_target = (root / stripped_name).resolve()
+        if fallback_target.exists() and fallback_target.is_dir():
+            return fallback_target
+            
+        # Second fallback: scan directory to find match ignoring trailing spaces
+        for item in root.iterdir():
+            if item.is_dir() and item.name.strip() == stripped_name:
+                return item
+                
         raise HTTPException(404, "目录不存在")
+        
     return target
 
 
