@@ -72,6 +72,7 @@ python server.py
 
 ## Docker 启动
 先创建目录和txt
+
 mkdir -p ./app/{data,logs}
 
 touch ./app/cookie.txt
@@ -118,6 +119,11 @@ docker run -d \
   "logs_dir": "./logs"
 }
 ```
+
+完整cookie获取
+随便打开一个模型，按f12，选择network，然后刷新页面，找到请求，复制cookie
+
+![cookie](doc/screenshot/完整cookie获取.png)
 
 ## 常用流程
 1. 在 `/config` 设置 Cookie（或调用 `POST /api/cookie`）。
