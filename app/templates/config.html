@@ -24,7 +24,7 @@
       <div>
         <h1>
           <i class="fas fa-archive"></i> MakerWorld 归档控制台
-          <span class="version">v4.0</span>
+          <span class="version">v5.0</span>
         </h1>
       </div>
       <div class="config-links">
@@ -112,6 +112,18 @@
               <button class="btn btn-primary" onclick="startArchive()">
                 <i class="fas fa-download"></i> 开始归档
               </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">归档页面维护</label>
+            <div class="archive-input-group">
+              <button class="btn btn-secondary" onclick="rebuildArchivedPages()">
+                <i class="fas fa-sync-alt"></i> 更新已归档页面
+              </button>
+              <div class="text-muted text-small" style="display:flex; align-items:center;">
+                基于现有 meta.json 与最新前端模板重建 index.html（增量更新）
+              </div>
             </div>
           </div>
         </div>
@@ -328,8 +340,9 @@
       });
       if (res.ok) {
         const data = await res.json();
-        appendLog('归档成功 -> ' + data.work_dir);
-        alert('归档完成,目录:' + data.work_dir);
+        const msg = data.message || (data.action === 'updated' ? '模型已更新成功' : '模型归档成功');
+        appendLog(`${msg} -> ${data.work_dir}`);
+        alert(`${msg}\n目录: ${data.work_dir}`);
         loadMissing();
       } else {
         const err = await res.text();
@@ -351,6 +364,28 @@
         const err = await res.text();
         appendLog('重试失败: ' + err);
         alert('下载失败: ' + err);
+      }
+    }
+
+    async function rebuildArchivedPages() {
+      if (!confirm('将基于当前模板增量更新已归档页面，是否继续？')) return;
+      appendLog('开始更新已归档页面...');
+      const res = await fetch('/api/archive/rebuild-pages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      if (res.ok) {
+        const data = await res.json();
+        appendLog(`页面更新完成：处理 ${data.processed}，更新 ${data.updated}，跳过 ${data.skipped}，失败 ${data.failed}`);
+        if (data.kept_v1) {
+          appendLog(`已保留旧版页面：${data.kept_v1} 个目录生成 index_v1.0.html`);
+        }
+        alert(`更新完成：处理 ${data.processed}，更新 ${data.updated}，跳过 ${data.skipped}，失败 ${data.failed}`);
+      } else {
+        const err = await res.text();
+        appendLog('更新已归档页面失败: ' + err);
+        alert('更新失败: ' + err);
       }
     }
 

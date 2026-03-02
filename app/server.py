@@ -149,8 +149,11 @@ def merge_dir_skip_existing(src: Path, dest: Path, log_obj: logging.Logger):
                     shutil.move(str(item), str(target))
             else:
                 if target.exists():
-                    log_obj.info("目标已存在，跳过移动: %s", target)
-                    continue
+                    log_obj.info("目标已存在，覆盖更新: %s", target)
+                    try:
+                        target.unlink()
+                    except Exception:
+                        pass
                 shutil.move(str(item), str(target))
         except Exception as e:
             log_obj.warning("移动临时文件失败: %s -> %s (%s)", item, target, e)
@@ -182,6 +185,114 @@ def parse_instance_descs(raw: str) -> List[str]:
     if not isinstance(data, list):
         return []
     return [str(item or "") for item in data]
+
+
+def looks_like_v2_index(content: str) -> bool:
+    if not content:
+        return False
+    return (
+        "window.__OFFLINE_META__" in content
+        or "/static/js/model.js" in content
+        or 'id="loadingState"' in content
+    )
+
+
+def get_v2_frontend_assets() -> List[Path]:
+    return [
+        BASE_DIR / "templates" / "model.html",
+        BASE_DIR / "static" / "css" / "variables.css",
+        BASE_DIR / "static" / "css" / "components.css",
+        BASE_DIR / "static" / "css" / "model.css",
+        BASE_DIR / "static" / "js" / "model.js",
+    ]
+
+
+def latest_rebuild_source_mtime(meta_path: Path, assets: List[Path]) -> float:
+    latest = meta_path.stat().st_mtime
+    for p in assets:
+        if p.exists():
+            latest = max(latest, p.stat().st_mtime)
+    return latest
+
+
+def rebuild_archived_pages(force: bool = False, backup: bool = False, dry_run: bool = False) -> dict:
+    root = Path(CFG["download_dir"]).resolve()
+    assets = get_v2_frontend_assets()
+    missing_assets = [str(p) for p in assets if not p.exists()]
+    if missing_assets:
+        raise RuntimeError("缺少前端资源文件: " + ", ".join(missing_assets))
+
+    meta_paths = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        meta_path = d / "meta.json"
+        if meta_path.exists():
+            meta_paths.append(meta_path)
+
+    processed = 0
+    updated = 0
+    kept_v1 = 0
+    skipped = 0
+    failed = 0
+    details = []
+
+    for meta_path in meta_paths:
+        model_dir = meta_path.parent
+        index_path = model_dir / "index.html"
+        v1_index_path = model_dir / "index_v1.0.html"
+        processed += 1
+
+        try:
+            old_content = ""
+            if index_path.exists():
+                old_content = index_path.read_text(encoding="utf-8", errors="ignore")
+            should_migrate_v1 = index_path.exists() and not v1_index_path.exists() and not looks_like_v2_index(old_content)
+            latest_src = latest_rebuild_source_mtime(meta_path, assets)
+            is_up_to_date = index_path.exists() and index_path.stat().st_mtime >= latest_src
+
+            if not force and not should_migrate_v1 and is_up_to_date:
+                skipped += 1
+                details.append({"dir": model_dir.name, "status": "skipped", "message": "up-to-date"})
+                continue
+
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            html = build_index_html(meta, {})
+
+            if dry_run:
+                if should_migrate_v1:
+                    details.append({"dir": model_dir.name, "status": "plan", "message": "index.html -> index_v1.0.html"})
+                details.append({"dir": model_dir.name, "status": "plan", "message": "write index.html"})
+                updated += 1
+                if should_migrate_v1:
+                    kept_v1 += 1
+                continue
+
+            if should_migrate_v1:
+                index_path.rename(v1_index_path)
+                kept_v1 += 1
+
+            if backup and index_path.exists():
+                bak_path = model_dir / "index.html.bak"
+                bak_path.write_text(index_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+            index_path.write_text(html, encoding="utf-8")
+            updated += 1
+            details.append({"dir": model_dir.name, "status": "ok", "message": "updated"})
+        except Exception as e:
+            failed += 1
+            details.append({"dir": model_dir.name, "status": "fail", "message": str(e)})
+
+    return {
+        "root": str(root),
+        "processed": processed,
+        "updated": updated,
+        "kept_v1": kept_v1,
+        "skipped": skipped,
+        "failed": failed,
+        "dry_run": dry_run,
+        "details": details,
+    }
 
 
 def make_summary_payload(text: str, summary_files: List[str]) -> dict:
@@ -713,10 +824,19 @@ async def api_archive(body: dict):
     try:
         reset_tmp_dir(TMP_DIR)
         logger.info("使用 Cookie 片段: %s", cookie[:200])
-        result = archive_model(url, cookie, TMP_DIR, Path(CFG["logs_dir"]), logger)
+        result = archive_model(
+            url,
+            cookie,
+            TMP_DIR,
+            Path(CFG["logs_dir"]),
+            logger,
+            existing_root=Path(CFG["download_dir"]),
+        )
         tmp_work_dir = Path(result.get("work_dir") or "")
         final_dir = finalize_tmp_archive(tmp_work_dir, Path(CFG["download_dir"]), logger)
         result["work_dir"] = str(final_dir.resolve())
+        action = result.get("action") or "created"
+        result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
         return {"status": "ok", **result}
     except requests.HTTPError as e:
         # 输出更多上下文（状态码与前 300 字符）
@@ -736,6 +856,20 @@ async def api_archive(body: dict):
             reset_tmp_dir(TMP_DIR)
         except Exception as e:
             logger.warning("清理临时目录失败: %s", e)
+
+
+@app.post("/api/archive/rebuild-pages")
+async def api_rebuild_archived_pages(body: dict = None):
+    payload = body or {}
+    force = bool(payload.get("force", False))
+    backup = bool(payload.get("backup", False))
+    dry_run = bool(payload.get("dry_run", False))
+    try:
+        result = rebuild_archived_pages(force=force, backup=backup, dry_run=dry_run)
+        return {"status": "ok", **result}
+    except Exception as e:
+        logger.exception("更新已归档页面失败")
+        raise HTTPException(500, f"更新已归档页面失败: {e}")
 
 
 @app.get("/api/logs/missing-3mf")
@@ -1089,6 +1223,7 @@ async def api_manual_import(
         ],
         "summary": summary_payload,
         "instances": instances,
+        "update_time": datetime.now().isoformat(),
         "generatedAt": Path().absolute().as_posix(),
         "note": "本文件包含结构化数据与打印配置详情。",
     }
@@ -1151,6 +1286,8 @@ async def api_v2_model_meta(model_dir: str):
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
         data["collectDate"] = int(meta_path.stat().st_mtime)
+        if not data.get("update_time"):
+            data["update_time"] = datetime.fromtimestamp(meta_path.stat().st_mtime).isoformat()
         return data
     except Exception as e:
         raise HTTPException(500, f"读取 meta.json 失败: {e}")

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>MakerWorld 归档助手配置</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>MakerWorld 归档助手 - 配置</h1>
+    <p class="desc">配置后端 API 地址（例如 <code>http://127.0.0.1:8000</code>）</p>
+    <label for="apiBase">后端 API 地址</label>
+    <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
+    <div class="row">
+      <button id="saveBtn">保存</button>
+      <button id="syncCookieBtn">同步 Cookie</button>
+    </div>
+
+    <label for="manualCookie">手动 Cookie（可选）</label>
+    <textarea id="manualCookie" rows="6" placeholder="粘贴完整 Cookie 字符串，例如: key1=value1; key2=value2; ..."></textarea>
+    <div class="row">
+      <button id="saveManualCookieBtn">保存并同步手动 Cookie</button>
+    </div>
+    <pre id="status">准备就绪</pre>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

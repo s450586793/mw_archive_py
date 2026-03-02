@@ -62,8 +62,8 @@ def _extract_auth_token(raw_cookie: str) -> str:
     )
 
 
-def download_file(session: requests.Session, url: str, dest: Path):
-    if dest.exists():
+def download_file(session: requests.Session, url: str, dest: Path, overwrite: bool = False):
+    if dest.exists() and not overwrite:
         log("存在，跳过：", dest)
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -818,6 +818,7 @@ def extract_instances(design: dict) -> List[dict]:
 
 
 def build_meta(design: dict, summary: dict, design_images: List[dict], cover_meta: Optional[dict], instances: List[dict], author: dict, base_name: str):
+    update_time = datetime.now().isoformat()
     counts = design.get("counts") or {}
     stats = {
         "likes": design.get("likeCount") or counts.get("likes") or 0,
@@ -875,6 +876,7 @@ def build_meta(design: dict, summary: dict, design_images: List[dict], cover_met
             "text": summary.get("text", ""),
         },
         "instances": instances,
+        "update_time": update_time,
         "generatedAt": Path().absolute().as_posix(),
         "note": "本文件包含结构化数据与打印配置详情。",
     }
@@ -928,6 +930,26 @@ def strip_prefix(name: str, base_name: str) -> str:
         if name.startswith(prefix):
             return name[len(prefix):]
     return name
+
+
+def choose_archive_base_name(design_id: int, title: str, existing_root: Optional[Path] = None) -> tuple[str, str]:
+    desired = f"MW_{design_id}_{sanitize_filename(title or 'model')}"
+    if existing_root is None:
+        return desired, "created"
+    try:
+        root = existing_root.resolve()
+    except Exception:
+        root = existing_root
+
+    exact_dir = root / desired
+    if exact_dir.exists() and exact_dir.is_dir():
+        return desired, "updated"
+
+    candidates = [p for p in root.glob(f"MW_{design_id}_*") if p.is_dir()]
+    if candidates:
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return candidates[0].name, "updated"
+    return desired, "created"
 
 
 STYLE_CSS = """
@@ -1672,11 +1694,7 @@ def rebuild_once(meta_path: Path):
             "file": dest.name,
         })
 
-    # 7. 写入 style.css
-    style_path = work_dir / "style.css"
-    style_path.write_text(STYLE_CSS, encoding="utf-8")
-
-    # 8. 生成 index.html
+    # 7. 生成 index.html（基于 templates/model.html + static/css/js 内联）
     design_files = sorted([p.name for p in images_dir.glob("design_*")])
     cover_file = next(iter(images_dir.glob("cover.*")), None)
     avatar_file = next(iter(images_dir.glob("author_avatar.*")), None)
@@ -1699,10 +1717,17 @@ def rebuild_once(meta_path: Path):
     log("完成归档:", work_dir)
 
 
-def archive_model(url: str, cookie: str, download_dir: Path, logs_dir: Path, logger=None):
+def archive_model(
+    url: str,
+    cookie: str,
+    download_dir: Path,
+    logs_dir: Path,
+    logger=None,
+    existing_root: Optional[Path] = None,
+):
     """
     对外主入口：采集 + 下载文件 + 生成 meta/index.html/style.css
-    返回: {base_name, work_dir, missing_3mf}
+    返回: {base_name, work_dir, missing_3mf, action}
     """
     # 采集阶段
     out_root = download_dir.resolve()
@@ -1761,7 +1786,7 @@ def archive_model(url: str, cookie: str, download_dir: Path, logs_dir: Path, log
     if design_id is None:
         raise RuntimeError("未获取到模型 ID")
     title = design.get("title") or "model"
-    base_name = f"MW_{design_id}_{sanitize_filename(title)}"
+    base_name, action = choose_archive_base_name(design_id, title, existing_root=existing_root)
     images_dir = out_root
 
     author = extract_author(design, html_text)
@@ -1841,7 +1866,13 @@ def archive_model(url: str, cookie: str, download_dir: Path, logs_dir: Path, log
         log(logger, "缺失 3MF 已记录:", missing_log)
 
     work_dir = meta_path.parent / (meta.get("baseName") or meta_path.stem.replace("_meta", ""))
-    return {"base_name": base_name, "work_dir": str(work_dir.resolve()), "missing_3mf": missing_3mf}
+    return {
+        "base_name": base_name,
+        "work_dir": str(work_dir.resolve()),
+        "missing_3mf": missing_3mf,
+        "action": action,
+        "model_id": design_id,
+    }
 
 
 if __name__ == "__main__":

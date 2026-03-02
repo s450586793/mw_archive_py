@@ -1,0 +1,109 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #f7f9fc;
+  color: #222;
+}
+
+.wrap {
+  width: 340px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 6px;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fff;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.btn {
+  flex: 1;
+  border: 1px solid #d8dee9;
+  background: #fff;
+  color: #222;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.btn.main {
+  width: 100%;
+  margin-bottom: 10px;
+  background: #00b800;
+  color: #fff;
+  border-color: #00b800;
+  font-size: 14px;
+  padding: 11px 10px;
+}
+
+.btn.main:hover {
+  background: #007b55
+}
+
+.btn:hover {
+  background: #f0f3f9;
+}
+
+.btn.primary {
+  background: #0ea5e9;
+  color: #fff;
+  border-color: #0ea5e9;
+}
+
+.btn.success {
+  background: #00aea5;
+  color: #fff;
+  border-color: #00aea5;
+}
+
+.btn.home {
+  background: #00b8d4;
+  color: #fff;
+  border-color: #00b8d4;
+}
+
+.btn.home:hover {
+  background: #00a4bd;
+}
+
+.btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  min-height: 36px;
+  white-space: pre-wrap;
+}
