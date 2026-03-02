@@ -72,7 +72,17 @@ python server.py
 
 ## Docker 启动
 ```bash
-# 项目根目录执行
+docker run -d \
+  --name mw-archiver \
+  -p 8000:8000 \
+  -v $PWD/app/data:/app/data \
+  -v $PWD/app/logs:/app/logs \
+  -v $PWD/app/cookie.txt:/app/cookie.txt \
+  sonicming/mw-archiver:latest
+```
+
+```bash
+# 本地构建
 bash docker_build.sh
 
 docker run -d \
@@ -81,7 +91,7 @@ docker run -d \
   -v $PWD/app/data:/app/data \
   -v $PWD/app/logs:/app/logs \
   -v $PWD/app/cookie.txt:/app/cookie.txt \
-  sonicming/mw-archiver:latest
+  mw-archiver
 ```
 
 ### Docker 参数详细说明
