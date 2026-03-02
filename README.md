@@ -71,11 +71,7 @@ python server.py
 - 配置页：`http://127.0.0.1:8000/config`
 
 ## Docker 启动
-先创建目录和txt
-
-mkdir -p ./app/{data,logs}
-
-touch ./app/cookie.txt
+在当前目录下，**先创建 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**
 
 ```bash
 docker run -d \
@@ -109,6 +105,32 @@ docker run -d \
 * **`-v $PWD/app/logs:/app/logs`**：日志目录映射。将运行日志和错误信息（如缺失 3MF 的记录日志）保存到宿主机，方便排查使用。
 * **`-v $PWD/app/cookie.txt:/app/cookie.txt`**：Cookie 凭证文件映射。此文件用于 MakerWorld 下载模型所需的认证信息。挂载出来便于配置持久化（即使在网页后端自动更新或重写了它的内容，宿主机上的文件也会同步更新）。*[注意：在首次执行 docker run 之前，如果 `app/cookie.txt` 在宿主机不存在，可能会被 Docker 错误识别并创建为目录，可以先在本地执行 `touch app/cookie.txt` 创建空文件]*。
 * **`sonicming/mw-archiver:latest`**：启动使用的 Docker 镜像名称以及对应的版本标签（latest）。
+
+## Docker Compose 启动
+
+创建 `docker-compose.yml` 文件（如果你希望通过 Docker Compose 管理服务）：
+
+```yaml
+version: '3.8'
+
+services:
+  mw-archiver:
+    image: sonicming/mw-archiver:latest
+    container_name: mw-archiver
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/data:/app/data
+      - ./app/logs:/app/logs
+      - ./app/cookie.txt:/app/cookie.txt
+    restart: unless-stopped
+```
+
+在同级目录下，**确保已经按前面步骤创建了 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**，然后执行以下命令将服务放置在后台启动：
+
+```bash
+docker-compose up -d
+```
 
 ## 配置说明
 配置文件为 [app/config.json](app/config.json)：
