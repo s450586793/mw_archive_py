@@ -21,7 +21,7 @@
 
 ## 项目结构
 ```text
-0.mw_archive/
+mw_archive/
 ├─ app/
 │  ├─ archiver.py
 │  ├─ server.py
@@ -73,7 +73,10 @@ python server.py
 ## Docker 启动
 在当前目录下，**先创建 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**
 
+> 注: logs和cookie.txt不是必须的，可以不挂载
+
 ```bash
+# 直接拉取
 docker run -d \
   --name mw-archiver \
   -p 8000:8000 \
@@ -102,13 +105,15 @@ docker run -d \
 * **`--name mw-archiver`**：为容器指定一个自定义名称标识（即 `mw-archiver`），方便后续使用 `docker logs mw-archiver` 或 `docker stop mw-archiver` 进行管理。
 * **`-p 8000:8000`**：端口映射，格式为 `宿主机端口:容器内端口`。将容器内部的 `8000` 端口映射给宿主机的 `8000` 端口，启动后即可通过 `http://localhost:8000` 访问网页服务。
 * **`-v $PWD/app/data:/app/data`**：数据目录映射（Volume）。将宿主机当前目录下的 `app/data` 挂载到容器内的 `/app/data`，使得所有归档下载的模型（3MF 文件、图片等数据）持久化保存在宿主机中，**防止容器重启或重建时数据丢失**。
-* **`-v $PWD/app/logs:/app/logs`**：日志目录映射。将运行日志和错误信息（如缺失 3MF 的记录日志）保存到宿主机，方便排查使用。
-* **`-v $PWD/app/cookie.txt:/app/cookie.txt`**：Cookie 凭证文件映射。此文件用于 MakerWorld 下载模型所需的认证信息。挂载出来便于配置持久化（即使在网页后端自动更新或重写了它的内容，宿主机上的文件也会同步更新）。*[注意：在首次执行 docker run 之前，如果 `app/cookie.txt` 在宿主机不存在，可能会被 Docker 错误识别并创建为目录，可以先在本地执行 `touch app/cookie.txt` 创建空文件]*。
+* **`-v $PWD/app/logs:/app/logs`**(非必须)：日志目录映射。将运行日志和错误信息（如缺失 3MF 的记录日志）保存到宿主机，方便排查使用。
+* **`-v $PWD/app/cookie.txt:/app/cookie.txt`**(非必须)：Cookie 凭证文件映射。此文件用于 MakerWorld 下载模型所需的认证信息。挂载出来便于配置持久化（即使在网页后端自动更新或重写了它的内容，宿主机上的文件也会同步更新）。*[注意：在首次执行 docker run 之前，如果 `app/cookie.txt` 在宿主机不存在，可能会被 Docker 错误识别并创建为目录，可以先在本地执行 `touch app/cookie.txt` 创建空文件]*。
 * **`sonicming/mw-archiver:latest`**：启动使用的 Docker 镜像名称以及对应的版本标签（latest）。
 
 ## Docker Compose 启动
 
-创建 `docker-compose.yml` 文件（如果你希望通过 Docker Compose 管理服务）：
+创建 `docker-compose.yml` 文件：
+
+> 注: logs和cookie.txt不是必须的，可以不挂载
 
 ```yaml
 version: '3.8'
@@ -126,14 +131,19 @@ services:
     restart: unless-stopped
 ```
 
-在同级目录下，**确保已经按前面步骤创建了 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**，然后执行以下命令将服务放置在后台启动：
+在同级目录下，**确保已经创建了 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**，然后执行以下命令将服务放置在后台启动：
 
 ```bash
 docker-compose up -d
 ```
 
+
 ## 配置说明
+### 配置文件
+一般不用修改
+
 配置文件为 [app/config.json](app/config.json)：
+
 ```json
 {
   "download_dir": "./data",
@@ -142,12 +152,22 @@ docker-compose up -d
 }
 ```
 
-完整cookie获取
+### 完整cookie获取
 随便打开一个模型，按f12，选择network，然后刷新页面，找到请求，复制cookie
 
 ![cookie](doc/screenshot/完整cookie获取.png)
 
+
+**cookie失效问题：**
+有时候cookie并不是失效了，而是触发了验证，需要手动下载一个模型解决验证
+
+![cookie手动验证](doc/screenshot/cookie手动验证.png)
+
+之后尽快在控制台重新下载模型
+![重新下载](doc/screenshot/重新下载.png)
+
 ## 常用流程
+http://127.0.0.1:8000
 1. 在 `/config` 设置 Cookie（或调用 `POST /api/cookie`）。
 2. 在 `/config` 输入模型链接执行归档（或调用 `POST /api/archive`）。
 3. 若同模型再次归档，系统自动执行更新。
@@ -155,6 +175,8 @@ docker-compose up -d
 5. 在 `/` 模型库查看、筛选、标记和打开本地模型页面。
 
 ## API 清单
+> 详细的接口、传参示例和返回说明，请参见完整的 [API 接口文档 (doc/api.md)](doc/api.md)
+
 - `GET /api/config`
 - `POST /api/cookie`
 - `POST /api/archive`
@@ -179,10 +201,12 @@ docker-compose up -d
 
 ## 插件说明
 Chrome 插件：
+- 一键归档，快速更新cookie
 - 目录：`plugin/chrome_extension/mw_quick_archive_ext`
 - 说明：[plugin/chrome_extension/使用说明.md](plugin/chrome_extension/使用说明.md)
 
 油猴脚本：
+- 一键归档，手动更新cookie
 - 文件：`plugin/tampermonkey/mw_quick_archive.user.js`
 - 说明：[plugin/tampermonkey/使用说明.md](plugin/tampermonkey/使用说明.md)
 
@@ -192,6 +216,7 @@ Chrome 插件：
 - `scripts/patch_attachments.py`、`scripts/patch_printed.py`：历史数据补丁脚本。
 
 ## 文档目录
+- [doc/api.md (API 接口文档)](doc/api.md)
 - [doc/v5.0_update_log.md](doc/v5.0_update_log.md)
 - [doc/v4.5_update_log.md](doc/v4.5_update_log.md)
 - [doc/v4.0_update_log.md](doc/v4.0_update_log.md)
