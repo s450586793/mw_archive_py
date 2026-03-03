@@ -362,6 +362,25 @@ def parse_instance_titles(raw: str) -> List[str]:
     return [str(item or "").strip() for item in data]
 
 
+def pick_instance_profile_summary(parsed: dict) -> str:
+    """仅提取配置级简介，并过滤与模型简介重复的内容。"""
+    if not isinstance(parsed, dict):
+        return ""
+    profile = str(parsed.get("profileSummaryText") or "").strip()
+    if not profile:
+        return ""
+    model = str(parsed.get("summaryText") or "").strip()
+    if not model:
+        return profile
+    p_norm = "".join(profile.split())
+    m_norm = "".join(model.split())
+    if not p_norm or not m_norm:
+        return profile
+    if p_norm == m_norm or p_norm in m_norm or m_norm in p_norm:
+        return ""
+    return profile
+
+
 def parse_draft_instance_overrides(raw: str) -> List[dict]:
     if not raw:
         return []
@@ -1505,7 +1524,8 @@ async def api_model_add_instance_from_3mf(
             meta["instances"] = instances
         new_id = next_instance_id(instances)
         inst_title = (title or "").strip() or str(parsed.get("profileTitle") or parsed.get("modelTitle") or dest_3mf.stem)
-        inst_summary = (summary or "").strip() or str(parsed.get("profileSummaryText") or parsed.get("summaryText") or "")
+        # 实例介绍只允许来自配置描述（ProfileDescription），且过滤与模型简介重复的内容
+        inst_summary = (summary or "").strip() or pick_instance_profile_summary(parsed)
 
         instances.append({
             "id": new_id,
@@ -1732,7 +1752,8 @@ async def api_manual_import(
         inst_title = manual_title or parsed_title or dest.stem
 
         manual_summary = (desc_list[idx - 1] if (idx - 1) < len(desc_list) else "").strip()
-        parsed_summary = str(parsed_inst.get("profileSummaryText") or parsed_inst.get("summaryText") or "").strip() if parsed_inst else ""
+        # 手动添加实例时，避免把模型主介绍误写入实例介绍
+        parsed_summary = pick_instance_profile_summary(parsed_inst) if parsed_inst else ""
         inst_summary = manual_summary or parsed_summary
 
         pics = []
