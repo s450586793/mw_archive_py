@@ -208,7 +208,7 @@ http://127.0.0.1:8000
 
 ## 插件说明
 Chrome 插件：
-- 一键归档，快速更新cookie
+- 一键归档，快速更新cookie(不完整,建议还是手动更新)
 - 目录：`plugin/chrome_extension/mw_quick_archive_ext`
 - 说明：[plugin/chrome_extension/使用说明.md](plugin/chrome_extension/使用说明.md)
 
@@ -216,14 +216,16 @@ Chrome 插件：
 - 一键归档，手动更新cookie
 - 文件：`plugin/tampermonkey/mw_quick_archive.user.js`
 - 说明：[plugin/tampermonkey/使用说明.md](plugin/tampermonkey/使用说明.md)
+- 直接安装插件地址 [地址](https://github.com/sonicmingit/mw_archive_py/raw/refs/heads/main/plugin/tampermonkey/mw_quick_archive.user.js)
 
 ## 脚本说明
-- `update.sh`：服务器更新部署脚本，支持 `git pull` 无更新时确认是否继续重部署。
+- `update.sh`：更新与部署编排脚本，支持 `git pull` 无更新时确认是否继续重部署。详细用法与“快速本地构建更新”配置见 [doc/readme/update_sh_usage.md](doc/readme/update_sh_usage.md)。
 - `scripts/rebuild_index_from_meta.py`：根据 `meta.json` 重建归档页面（兼容场景）。
 - `scripts/patch_attachments.py`、`scripts/patch_printed.py`：历史数据补丁脚本。
 
 ## 文档目录
 - [api.md (API 接口文档)](doc/readme/api.md)
+- [update.sh 使用说明](doc/readme/update_sh_usage.md)
 - [v5.1.1_update_log.md](doc/logs/v5.1.1_update_log.md)
 - [v5.1.2_update_log.md](doc/logs/v5.1.2_update_log.md)
 - [v5.1_update_log.md](doc/logs/v5.1_update_log.md)
