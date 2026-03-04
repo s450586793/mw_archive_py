@@ -479,6 +479,34 @@ def latest_rebuild_source_mtime(meta_path: Path, assets: List[Path]) -> float:
     return latest
 
 
+def _candidate_instance_names(inst: dict) -> List[str]:
+    if not isinstance(inst, dict):
+        return []
+    out: List[str] = []
+    for key in ("fileName", "name", "sourceFileName", "localName", "title"):
+        raw = str(inst.get(key) or "").strip()
+        if not raw:
+            continue
+        name = Path(raw).name.strip()
+        if not name:
+            continue
+        out.append(name)
+        if Path(name).suffix == "":
+            out.append(f"{name}.3mf")
+    # 去重并保持顺序
+    return list(dict.fromkeys(out))
+
+
+def resolve_instance_filename(inst: dict, instances_dir: Path) -> str:
+    if not instances_dir.exists() or not instances_dir.is_dir():
+        return ""
+    candidates = _candidate_instance_names(inst)
+    for name in candidates:
+        if (instances_dir / name).is_file():
+            return name
+    return ""
+
+
 def rebuild_archived_pages(force: bool = False, backup: bool = False, dry_run: bool = False) -> dict:
     root = Path(CFG["download_dir"]).resolve()
     assets = get_v2_frontend_assets()
@@ -499,6 +527,8 @@ def rebuild_archived_pages(force: bool = False, backup: bool = False, dry_run: b
     kept_v1 = 0
     skipped = 0
     failed = 0
+    fixed_instance_files = 0
+    unresolved_instance_files = 0
     details = []
 
     for meta_path in meta_paths:
@@ -516,6 +546,19 @@ def rebuild_archived_pages(force: bool = False, backup: bool = False, dry_run: b
                 "attachments": list_files_in_dir(model_dir / "file", image_only=False),
                 "printed": list_files_in_dir(model_dir / "printed", image_only=True),
             }
+            instances = meta.get("instances")
+            if isinstance(instances, list):
+                instances_dir = model_dir / "instances"
+                for inst in instances:
+                    if not isinstance(inst, dict):
+                        continue
+                    resolved_name = resolve_instance_filename(inst, instances_dir)
+                    if not resolved_name:
+                        unresolved_instance_files += 1
+                        continue
+                    if str(inst.get("fileName") or "").strip() != resolved_name:
+                        inst["fileName"] = resolved_name
+                        fixed_instance_files += 1
             meta_changed = meta != meta_raw
 
             old_content = ""
@@ -564,6 +607,8 @@ def rebuild_archived_pages(force: bool = False, backup: bool = False, dry_run: b
         "kept_v1": kept_v1,
         "skipped": skipped,
         "failed": failed,
+        "fixed_instance_files": fixed_instance_files,
+        "unresolved_instance_files": unresolved_instance_files,
         "dry_run": dry_run,
         "details": details,
     }
@@ -1946,6 +1991,47 @@ async def api_delete_model(model_dir: str):
 
 
 # ---------- v2: 模板渲染模型详情页（测试） ----------
+
+@app.get("/api/models/{model_dir}/instances/{inst_id}/download")
+async def api_model_instance_download(model_dir: str, inst_id: int):
+    import urllib.parse
+
+    target = resolve_model_dir(model_dir)
+    meta_path = target / "meta.json"
+    instances_dir = target / "instances"
+    if not meta_path.exists():
+        raise HTTPException(404, "meta.json 不存在")
+    if not instances_dir.exists() or not instances_dir.is_dir():
+        raise HTTPException(404, "instances 目录不存在")
+
+    data = read_json_file(meta_path, {})
+    instances = data.get("instances") if isinstance(data, dict) else None
+    if not isinstance(instances, list):
+        raise HTTPException(404, "未找到实例信息")
+
+    target_inst = next((x for x in instances if isinstance(x, dict) and str(x.get("id")) == str(inst_id)), None)
+    if not target_inst:
+        raise HTTPException(404, "未找到对应实例")
+
+    resolved_name = resolve_instance_filename(target_inst, instances_dir)
+    if not resolved_name:
+        raise HTTPException(404, "找不到对应的打印配置或者模型文件")
+
+    full_path = (instances_dir / resolved_name).resolve()
+    if not str(full_path).startswith(str(instances_dir.resolve())) or not full_path.is_file():
+        raise HTTPException(404, "找不到对应的打印配置或者模型文件")
+
+    # 运行时自愈：回填 fileName，后续无需再次猜测
+    if str(target_inst.get("fileName") or "").strip() != resolved_name:
+        target_inst["fileName"] = resolved_name
+        try:
+            meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            logger.warning("回填实例 fileName 失败: %s / %s", model_dir, inst_id)
+
+    encoded_filename = urllib.parse.quote(full_path.name)
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    return FileResponse(full_path, headers=headers)
 
 @app.get("/api/models/{model_dir}/file/{file_path:path}")
 async def api_model_file_download(model_dir: str, file_path: str):

@@ -152,12 +152,12 @@
 
     function pickInstanceFilename(inst, nameHint) {
         // 优先使用已明确指定的文件名
-        var explicit = toName((inst && (inst.fileName || inst.localName)) || '');
+        var explicit = toName((inst && (inst.fileName || inst.name || inst.sourceFileName || inst.localName)) || '');
         if (explicit) return explicit;
 
         // 与 Python archiver.pick_instance_filename 保持一致：
-        // base = sanitize(title || name || id)
-        var baseName = (inst && (inst.title || inst.name)) || '';
+        // base = sanitize(name || sourceFileName || title || id)
+        var baseName = (inst && (inst.name || inst.sourceFileName || inst.title)) || '';
         if (!baseName && inst) baseName = String(inst.id || 'model');
         // 简单 sanitize：去除文件系统不允许的字符
         var base = String(baseName).replace(/[\\/:*?"<>|]/g, '_').replace(/\s+$/, '');
@@ -167,7 +167,7 @@
 
         // 从 nameHint 推断扩展名
         var ext = '';
-        var hint = nameHint || (inst && inst.name) || '';
+        var hint = nameHint || (inst && (inst.name || inst.sourceFileName)) || '';
         if (hint && hint.indexOf('.') > -1) {
             ext = '.' + hint.split('.').pop();
         }
@@ -381,7 +381,11 @@
         var filaments = inst.instanceFilaments || [];
 
         var fileName = pickInstanceFilename(inst, inst.name || '');
-        var dlHrefLocal = fileUrl(MODEL_DIR, 'instances/' + fileName);
+        var dlById = '';
+        if (inst && inst.id !== undefined && inst.id !== null && String(inst.id).trim() !== '') {
+            dlById = apiUrl('/api/models/' + encodeURIComponent(MODEL_DIR) + '/instances/' + encodeURIComponent(String(inst.id)) + '/download');
+        }
+        var dlHrefLocal = dlById || fileUrl(MODEL_DIR, 'instances/' + fileName);
 
         function toHex(str) {
             var utf8Str = unescape(encodeURIComponent(str));
@@ -394,7 +398,7 @@
             return hex;
         }
         var rawRelPath = MODEL_DIR + '/instances/' + fileName;
-        var bambuProxyUrl = window.location.origin + '/api/bambu/download/' + toHex(rawRelPath) + '.3mf';
+        var bambuProxyUrl = dlById || (window.location.origin + '/api/bambu/download/' + toHex(rawRelPath) + '.3mf');
 
         // 耗材 chips
         var chipsHtml = '';
@@ -474,7 +478,7 @@
             '</div>' +
             (dlHrefLocal ? '<div class="inst-actions">' +
                 (platesDataHtml ? '<button class="inst-btn inst-details" onclick="openPlatesModal(this)" data-plates="' + platesDataHtml + '"><i class="fas fa-list"></i> 详情</button>' : '') +
-                '<a class="inst-btn inst-bambu" href="bambustudio://open?file=' + bambuProxyUrl + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> 打印</a>' +
+                '<a class="inst-btn inst-bambu" href="bambustudio://open?file=' + encodeURIComponent(bambuProxyUrl) + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> 打印</a>' +
                 '<a class="inst-btn inst-local" href="' + dlHrefLocal + '" target="_blank" rel="noreferrer" title="下载资源"><i class="fas fa-download"></i> 下载</a>' +
                 '</div>' : '') +
             '</div>' +
