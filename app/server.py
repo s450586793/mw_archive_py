@@ -13,7 +13,9 @@ from urllib.parse import urlparse
 
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -1157,7 +1159,42 @@ def scan_gallery(cfg) -> List[dict]:
 
 app = FastAPI()
 app.add_middleware(
+    SessionMiddleware,
+    secret_key="makerworld-secret-key",
+)
+app.add_middleware(
     CORSMiddleware,
+    @app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+
+    path = request.url.path
+
+    # 不需要登录的路径
+    public_paths = [
+        "/login",
+        "/logout",
+        "/static",
+        "/tmp"
+    ]
+
+    # 放行静态资源
+    if any(path.startswith(p) for p in public_paths):
+        return await call_next(request)
+
+    # API 必须登录
+    if path.startswith("/api"):
+        if not request.session.get("user"):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "未登录"}
+            )
+
+    # 页面必须登录
+    if path in ["/", "/config"] or path.startswith("/v2"):
+        if not request.session.get("user"):
+            return RedirectResponse("/login")
+
+    return await call_next(request)
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
@@ -1169,15 +1206,84 @@ ensure_manual_counter_file(CFG)
 
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 MANUAL_DRAFT_ROOT.mkdir(parents=True, exist_ok=True)
+USERNAME = "admin"
+PASSWORD = "admin123"
 
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    return """
+    <html>
+    <head>
+        <title>登录</title>
+        <style>
+        body{
+            font-family:Arial;
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            height:100vh;
+            background:#f2f2f2;
+        }
+        .box{
+            background:white;
+            padding:30px;
+            border-radius:10px;
+            width:300px;
+        }
+        input{
+            width:100%;
+            padding:10px;
+            margin-top:10px;
+        }
+        button{
+            width:100%;
+            margin-top:15px;
+            padding:10px;
+        }
+        </style>
+    </head>
+    <body>
+        <form class="box" method="post" action="/login">
+            <h3>登录 MakerWorld Archive</h3>
+            <input name="username" placeholder="用户名"/>
+            <input name="password" type="password" placeholder="密码"/>
+            <button type="submit">登录</button>
+        </form>
+    </body>
+    </html>
+    """
+
+
+@app.post("/login")
+async def login(request: Request):
+    form = await request.form()
+    username = form.get("username")
+    password = form.get("password")
+
+    if username == USERNAME and password == PASSWORD:
+        request.session["user"] = username
+        return RedirectResponse("/", status_code=302)
+
+    return HTMLResponse("<h3>登录失败</h3><a href='/login'>返回</a>")
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login")
+    
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/files", StaticFiles(directory=CFG["download_dir"], html=True), name="files")
 app.mount("/tmp", StaticFiles(directory=TMP_DIR), name="tmp")
 
-
+def check_login(request: Request):
+    if not request.session.get("user"):
+        raise HTTPException(status_code=401, detail="未登录")
+        
 @app.get("/")
-async def gallery_page():
-    return FileResponse(BASE_DIR / "templates" / "gallery.html")
+async def gallery_page(request: Request):
+    if not request.session.get("user"):
+        return RedirectResponse("/login")
 
 
 @app.get("/config")
