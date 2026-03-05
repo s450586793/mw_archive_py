@@ -16,7 +16,7 @@
 
 - `MW_*`：在线归档（MakerWorld 抓取）
 - `LocalModel_*`：手动导入（本地模型）
-- `Others_*`：手动导入（其他来源）
+- `Others_*`：手动导入（旧版遗留）
 
 ### 2.1 类型判定规则（运行时）
 
@@ -159,6 +159,27 @@
 - 下载相关：`name`, `fileName`, `sourceFileName(本地导入常见)`, `downloadUrl`, `apiUrl`
 - 媒体：`plates[]`, `pictures[]`, `instanceFilaments[]`
 
+
+### `instances[] 中的名称`
+
+`title`
+含义：给用户看的“实例名称/配置标题”（展示名）
+作用：详情页实例卡标题显示、人工识别用
+特点：可读性优先，不保证是合法文件名，也不保证唯一
+
+`name`
+含义：来源侧返回的原始 3MF 名称（偏“来源名”）
+作用：历史兼容与回填候选（当 fileName 缺失时会拿它猜文件名）
+特点：可能和 title 一样，也可能是 API 返回名；不应作为最终落盘文件唯一标识
+
+`fileName`
+含义：本地 instances/ 目录里的真实文件名（落盘名）
+作用：下载接口定位文件、前端下载链接构建、重建页面与自愈逻辑的主字段
+特点：应稳定、可落盘、尽量唯一；你这次修复后冲突会自动改成唯一名（如 _id 后缀）
+
+
+title = 展示名，name = 来源原名，fileName = 本地真实文件名（实际应以它为准）。
+
 ### `plates[]`
 
 常见字段：`index`, `prediction`, `weight`, `filaments[]`, `thumbnailUrl`, `thumbnailRelPath`, `thumbnailFile`
@@ -175,6 +196,9 @@
 - 详情页实例卡渲染：`app/static/js/model.js`
 - 实例下载接口：`/api/models/{model_dir}/instances/{inst_id}/download`
 - 重下载修复：`/api/instances/{inst_id}/redownload`、`/api/models/{id}/redownload`
+
+
+
 
 ## 5. 归档模型 vs 本地导入差异
 
