@@ -818,6 +818,75 @@ def pick_instance_filename(inst: dict, name_hint: str = "") -> str:
     return f"{base}.3mf"
 
 
+def choose_unique_instance_filename(
+    inst: dict,
+    all_instances: List[dict],
+    instances_dir: Path,
+    name_hint: str = "",
+) -> str:
+    """
+    为实例选择“不会与其它实例冲突”的 3MF 文件名。
+
+    规则：
+    1) 优先使用当前实例已有 fileName（若安全）
+    2) 否则使用 pick_instance_filename 结果
+    3) 若冲突（其它实例已占用或磁盘已存在）则自动追加 _{id} / _{n}
+    """
+    explicit_raw = str(inst.get("fileName") or "").strip()
+    explicit_name = ""
+    if explicit_raw:
+        explicit_name = sanitize_filename(Path(explicit_raw).name)
+        if explicit_name and not explicit_name.lower().endswith(".3mf"):
+            explicit_name += ".3mf"
+
+    preferred = explicit_name or pick_instance_filename(inst, name_hint)
+    if not preferred:
+        preferred = f"{inst.get('id') or 'model'}.3mf"
+
+    used_by_others = set()
+    for other in all_instances or []:
+        if other is inst or not isinstance(other, dict):
+            continue
+        raw = str(other.get("fileName") or "").strip()
+        if not raw:
+            continue
+        nm = sanitize_filename(Path(raw).name)
+        if nm and not nm.lower().endswith(".3mf"):
+            nm += ".3mf"
+        if nm:
+            used_by_others.add(nm)
+
+    def _can_use(name: str) -> bool:
+        if not name:
+            return False
+        if name in used_by_others:
+            return False
+        if explicit_name and name == explicit_name:
+            return True
+        if (instances_dir / name).exists():
+            return False
+        return True
+
+    if _can_use(preferred):
+        return preferred
+
+    stem = Path(preferred).stem or str(inst.get("id") or "model")
+    ext = Path(preferred).suffix or ".3mf"
+
+    inst_id = str(inst.get("id") or "").strip()
+    if inst_id:
+        candidate = sanitize_filename(f"{stem}_{inst_id}{ext}")
+        if _can_use(candidate):
+            return candidate
+
+    idx = 1
+    while True:
+        candidate = sanitize_filename(f"{stem}_{idx}{ext}")
+        if _can_use(candidate):
+            return candidate
+        idx += 1
+
+
 def retry_missing_downloads(cfg, cookie: str):
     missing_log = Path(cfg["logs_dir"]) / "missing_3mf.log"
     if not missing_log.exists():
@@ -882,7 +951,7 @@ def retry_missing_downloads(cfg, cookie: str):
 
         inst_dir = base_dir / "instances"
         inst_dir.mkdir(parents=True, exist_ok=True)
-        file_name = pick_instance_filename(target, name3mf)
+        file_name = choose_unique_instance_filename(target, instances, inst_dir, name3mf)
         dest = inst_dir / file_name
         used_existing = False
         try:
@@ -902,6 +971,7 @@ def retry_missing_downloads(cfg, cookie: str):
             target["apiUrl"] = used_api_url
         if name3mf:
             target["name"] = name3mf
+        target["fileName"] = file_name
         try:
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
@@ -962,7 +1032,7 @@ def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
         base_dir = meta_path.parent
         inst_dir = base_dir / "instances"
         inst_dir.mkdir(parents=True, exist_ok=True)
-        file_name = pick_instance_filename(target, name3mf or target.get("name") or "")
+        file_name = choose_unique_instance_filename(target, instances, inst_dir, name3mf or target.get("name") or "")
         dest = inst_dir / file_name
         if dest.exists():
             try:
@@ -980,6 +1050,7 @@ def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
             target["apiUrl"] = used_api_url
         if name3mf:
             target["name"] = name3mf
+        target["fileName"] = file_name
         try:
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
@@ -1052,7 +1123,7 @@ def redownload_model_by_id(cfg, cookie: str, model_id: int):
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": "未返回下载地址"})
                 continue
 
-            file_name = pick_instance_filename(inst, name3mf or inst.get("name") or "")
+            file_name = choose_unique_instance_filename(inst, instances, inst_dir, name3mf or inst.get("name") or "")
             dest = inst_dir / file_name
             if dest.exists():
                 try:
@@ -1070,6 +1141,7 @@ def redownload_model_by_id(cfg, cookie: str, model_id: int):
                 inst["apiUrl"] = used_api_url
             if name3mf:
                 inst["name"] = name3mf
+            inst["fileName"] = file_name
             success += 1
             details.append({"status": "ok", "base_name": meta.get("baseName"), "inst_id": inst_id, "file": dest.name, "downloadUrl": dl_url})
 
@@ -2201,6 +2273,27 @@ async def api_v2_model_meta(model_dir: str):
         ensure_collect_date(data, int(meta_path.stat().st_mtime))
         if not data.get("update_time"):
             data["update_time"] = datetime.fromtimestamp(meta_path.stat().st_mtime).isoformat()
+
+        # 兼容历史归档：批量回填 instances[].fileName，减少前端/接口猜测成本
+        instances_changed = False
+        instances = data.get("instances")
+        if isinstance(instances, list):
+            instances_dir = target / "instances"
+            for inst in instances:
+                if not isinstance(inst, dict):
+                    continue
+                resolved = resolve_instance_filename(inst, instances_dir)
+                if not resolved:
+                    continue
+                if str(inst.get("fileName") or "").strip() != resolved:
+                    inst["fileName"] = resolved
+                    instances_changed = True
+        if instances_changed:
+            try:
+                meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.warning("批量回填 instances.fileName 失败: %s", model_dir)
+
         return data
     except Exception as e:
         raise HTTPException(500, f"读取 meta.json 失败: {e}")

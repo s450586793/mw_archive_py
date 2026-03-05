@@ -91,6 +91,78 @@ def pick_instance_filename(inst: dict, name_hint: str = "") -> str:
     return f"{base}.3mf"
 
 
+def choose_unique_instance_filename(
+    inst: dict,
+    all_instances: List[dict],
+    instances_dir: Path,
+    name_hint: str = "",
+) -> str:
+    """
+    为实例选择“不会与其它实例冲突”的 3MF 文件名。
+
+    规则：
+    1) 优先使用当前实例已有 fileName（若安全）
+    2) 否则使用 pick_instance_filename 结果
+    3) 若冲突（其它实例已占用或磁盘已存在）则自动追加 _{id} / _{n}
+    """
+    explicit_raw = str(inst.get("fileName") or "").strip()
+    explicit_name = ""
+    if explicit_raw:
+        explicit_name = sanitize_filename(Path(explicit_raw).name)
+        if explicit_name and not explicit_name.lower().endswith(".3mf"):
+            explicit_name += ".3mf"
+
+    preferred = explicit_name or pick_instance_filename(inst, name_hint)
+    if not preferred:
+        preferred = f"{inst.get('id') or 'model'}.3mf"
+
+    # 收集“其它实例”已声明的 fileName，避免多个实例指向同一文件
+    used_by_others = set()
+    for other in all_instances or []:
+        if other is inst or not isinstance(other, dict):
+            continue
+        raw = str(other.get("fileName") or "").strip()
+        if not raw:
+            continue
+        nm = sanitize_filename(Path(raw).name)
+        if nm and not nm.lower().endswith(".3mf"):
+            nm += ".3mf"
+        if nm:
+            used_by_others.add(nm)
+
+    def _can_use(name: str) -> bool:
+        if not name:
+            return False
+        if name in used_by_others:
+            return False
+        # 当前实例若已有 fileName，且文件存在，可复用该文件名
+        if explicit_name and name == explicit_name:
+            return True
+        # 否则磁盘存在同名文件时视为冲突，避免覆盖/误复用
+        if (instances_dir / name).exists():
+            return False
+        return True
+
+    if _can_use(preferred):
+        return preferred
+
+    stem = Path(preferred).stem or str(inst.get("id") or "model")
+    ext = Path(preferred).suffix or ".3mf"
+
+    inst_id = str(inst.get("id") or "").strip()
+    if inst_id:
+        candidate = sanitize_filename(f"{stem}_{inst_id}{ext}")
+        if _can_use(candidate):
+            return candidate
+
+    idx = 1
+    while True:
+        candidate = sanitize_filename(f"{stem}_{idx}{ext}")
+        if _can_use(candidate):
+            return candidate
+        idx += 1
+
+
 def fetch_html_with_requests(session: requests.Session, url: str, raw_cookie: str) -> Optional[str]:
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -1739,11 +1811,15 @@ def rebuild_once(meta_path: Path):
     # 6. 下载 3MF 到 instances 目录
     instances = meta.get("instances", []) or []
     inst_files = []
+    meta_changed = False
     for inst in instances:
         url = inst.get("downloadUrl")
         if not url:
             continue
-        fn = pick_instance_filename(inst, inst.get("name") or "")
+        fn = choose_unique_instance_filename(inst, instances, instances_dir, inst.get("name") or "")
+        if str(inst.get("fileName") or "").strip() != fn:
+            inst["fileName"] = fn
+            meta_changed = True
         dest = instances_dir / fn
 
         download_file(REBUILD_SESSION, url, dest)
@@ -1752,6 +1828,10 @@ def rebuild_once(meta_path: Path):
             "title": inst.get("title") or inst.get("name") or str(inst.get("id")),
             "file": dest.name,
         })
+
+    # 若实例文件名发生唯一化调整，写回 meta.json，保证元数据与磁盘一致
+    if meta_changed:
+        target_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 7. 生成 index.html（基于 templates/model.html + static/css/js 内联）
     design_files = sorted([p.name for p in images_dir.glob("design_*")])
@@ -1863,6 +1943,7 @@ def archive_model(
     origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}" if parsed_origin.scheme and parsed_origin.netloc else "https://makerworld.com.cn"
 
     inst_list = []
+    planned_instances_dir = out_root / base_name / "instances"
     for inst in extract_instances(design):
         inst_id = inst.get("id") or inst.get("instanceId")
         if inst_id is None:
@@ -1877,7 +1958,7 @@ def archive_model(
             api_host_hint=api_host_hint,
             origin=origin,
         )
-        inst_list.append({
+        inst_record = {
             "id": inst_id,
             "profileId": inst.get("profileId") or inst.get("profile_id") or inst.get("profileID"),
             "title": inst.get("title") or inst.get("name"),
@@ -1898,7 +1979,16 @@ def archive_model(
             "name": name3mf,
             "downloadUrl": url3mf,
             "apiUrl": used_api_url or api_url,
-        })
+        }
+        # 在构建 meta 阶段就写入 fileName，保证后续语义清晰：
+        # title=展示名，name=来源名，fileName=本地真实文件名。
+        inst_list.append(inst_record)
+        inst_record["fileName"] = choose_unique_instance_filename(
+            inst_record,
+            inst_list,
+            planned_instances_dir,
+            inst_record.get("name") or "",
+        )
 
     meta = build_meta(design, summary, design_images, cover_meta, inst_list, author, base_name)
     meta_path = out_root / f"{base_name}_meta.json"

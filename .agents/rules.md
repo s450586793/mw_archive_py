@@ -39,10 +39,35 @@ mw_archive/
 - HTML/CSS: class 命名采用 `kebab-case`，组件级前缀（如 `manual-`、`config-`）
 - 所有文件使用 UTF-8 编码
 - 中文注释优先，关键逻辑必须写注释
+- 脚本规范（适用于 `.sh` / `.ps1` / `.py` 等脚本文件）：
+  - 脚本顶部必须包含“脚本说明”（用途、输入参数、执行流程/注意事项）
+  - 脚本内部必须添加详细中文注释，说明关键步骤、分支逻辑和异常处理意图
 
 ## 开发流程规则
 - 修改代码前，必须先阅读 `.agents/dev_logic_map.md` 中的代码逻辑说明，确认改动入口与影响范围
 - 代码修改完成后，必须同步更新 `.agents/dev_logic_map.md`，补充或修正对应逻辑说明，保证文档与代码一致
+- 需求协作流程约定：
+  - 统一在 `doc/plan/` 记录需求，必须使用 `doc/plan/README.md` 内的标准模板
+  - 每个需求使用独立文件：`REQ-YYYYMMDD-序号.md`
+  - 需求文档必须包含三段：
+    - 用户需求记录（原始描述 + 初步思路）
+    - AI 分析（实现难度 / 实现思路 / 大体改动内容）
+    - AI 实现记录（实际改动与验证）
+  - 当用户只给需求描述时，先由 AI 新建需求文档并补全“需求记录 + AI分析”
+  - 用户后续补充后，AI 按指定需求编号读取文档并执行开发，完成后回写“AI实现记录”
+- Bug 协作流程约定：
+  - 统一在 `doc/bugs/` 记录 Bug，必须使用 `doc/bugs/README.md` 内的标准模板
+  - 状态字段统一使用 emoji 标记：`🟡 待确认`、`🛠️ 处理中`、`🧪 待验证`、`✅ 已解决`、`⚪ 已关闭`
+  - 每个 Bug 使用独立文件：`BUG-YYYYMMDD-序号.md`
+  - `doc/bugs/README.md` 的“当前 Bug 列表”索引必须使用“编号 + 标题”格式，便于快速检索
+  - 当用户仅提供问题描述时，先由 AI 按模板新增独立 Bug 文档并分配 Bug 编号
+  - 用户后续补充细节后，AI 仅根据指定 Bug 编号进行定位、修复与状态更新
+  - 修复完成后，必须回写对应 Bug 文档：更新状态、解决时间、修复记录、验证记录
+- 版本日志协作流程约定：
+  - 统一在 `doc/logs/` 记录发布日志，必须使用 `doc/logs/README.md` 内置模板
+  - 每个版本使用独立文件：`vX.Y.Z_update_log.md`
+  - `doc/logs/README.md` 维护日志说明、模板入口和日志索引
+  - 每次同步根 `README.md` 的「## 当前版本」后，必须在 `doc/logs/README.md` 的“README 当前版本同步记录”中增加一条记录
 
 ## 前端开发规范
 - 不使用前端框架，保持原生 HTML/CSS/JS
@@ -60,23 +85,58 @@ mw_archive/
 ## 版本管理规则
 
 ### 版本号更新
-- 每次更新必须同步修改 `app/templates/config.html` 中的版本号:
-  ```html
-  <span class="version">vX.X.X</span>
+- 版本号唯一来源为根目录 `version.yml`，禁止手动分散修改各文件版本号
+- 版本字段说明:
+  - `project_version`: 项目主版本（用于 README、配置页展示、发布 tag）
+  - `tampermonkey_version`: 油猴脚本版本（同步到 `@version`）
+  - `chrome_extension_version`: Chrome 扩展版本（同步到 `manifest.json`）
+- 每次版本更新后，必须执行:
+  ```bash
+  python3 scripts/sync_version.py
   ```
+- `scripts/sync_version.py` 负责把 `version.yml` 同步到以下文件:
+  - `README.md`（当前版本）
+  - `app/templates/config.html`（页面版本、静态资源 query 版本）
+  - `plugin/tampermonkey/mw_quick_archive.user.js`（`@version`）
+  - `plugin/chrome_extension/mw_quick_archive_ext/manifest.json`（`version`）
 - 大版本号（如 v5.0 → v6.0）用于重大功能更新或架构变更
 - 小版本号（如 v5.0 → v5.1）用于功能新增或较大的修复
 - 补丁版本号（如 v5.1 → v5.1.1）用于兼容性修复、文案优化、界面微调等不改变整体架构的更新
-- 当前版本规则按 `v5.1.1` 执行，后续版本统一使用三段式版本号（`vX.Y.Z`）
+- 版本统一使用三段式版本号（`vX.Y.Z`）
 
 ### 版本更新日志
 - 每次大的更新在 `doc/logs/` 目录下创建版本更新日志文件
   - 文件命名: `vX.X.X_update_log.md`
   - 内容: 包含详细的技术变更内容、涉及文件、改动细节
+- `doc/logs/` 目录维护要求:
+  - `README.md`：说明、标准模板、日志索引、README 当前版本同步记录
+- 索引可读性要求：
+  - `doc/bugs/README.md` 与 `doc/plan/README.md` 的列表索引均需包含“编号 + 标题”
 - 同时在根目录 `README.md` 中:
-  - 更新"当前版本"区块的版本号和日期
+  - 更新"当前版本"区块内容（由 `sync_version.py` 同步版本号）
   - 添加对应的更新日志链接
   - 写一段面向用户的简洁更新说明
+- GitHub Release 正文来自 `README.md` 的 `## 当前版本` 区块（由工作流自动提取）
+
+### 发布流程（标准）
+1. 功能开发完成
+2. 人工确认要发布的版本号（修改 `version.yml`）
+3. AI 负责:
+   - 总结本次更新内容
+   - 更新/创建 `doc/logs/vX.X.X_update_log.md`
+   - 同步根 `README.md` 的「## 当前版本」（版本号、日志链接、重点说明）
+   - 在 `doc/logs/README.md` 的“README 当前版本同步记录”追加一条记录
+   - 运行 `scripts/sync_version.py` 同步版本到项目文件
+   - 输出改动清单供人工确认（不自动执行 git commit）
+4. 用户手动执行:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\release_tag.ps1
+   ```
+   或（Git Bash / Linux / macOS）:
+   ```bash
+   bash ./scripts/release_tag.sh
+   ```
+5. 发布脚本负责 tag 与 push；推送 `v*` tag 后，GitHub Actions 自动创建 Release
 
 ### 更新日志模板
 ```markdown
