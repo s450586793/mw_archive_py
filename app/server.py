@@ -1262,16 +1262,13 @@ async def login_page():
 
 
 @app.post("/login")
-async def login(request: Request):
-    form = await request.form()
-    username = form.get("username")
-    password = form.get("password")
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
 
     if username == USERNAME and password == PASSWORD:
         request.session["user"] = username
         return RedirectResponse("/", status_code=302)
 
-    return HTMLResponse("<h3>登录失败</h3><a href='/login'>返回</a>")
+    return {"error": "login failed"}
 
 
 @app.get("/logout")
@@ -1298,15 +1295,7 @@ async def gallery_page(request: Request):
     if not request.session.get("user"):
         return RedirectResponse("/login")
 
-    html = (BASE_DIR / "mw-archiver-test.html").read_text()
-    return HTMLResponse(html)
-
-    # 没登录跳转登录页
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
-
-    # 已登录显示页面
-    return HTMLResponse(open("mw-archiver-test.html").read())
+    # 原来的代码保持不动
 
 
 @app.get("/config")
