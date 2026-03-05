@@ -1287,8 +1287,19 @@ def check_login(request: Request):
     if not request.session.get("user"):
         raise HTTPException(status_code=401, detail="未登录")
         
+import pathlib
+
+BASE_DIR = pathlib.Path(__file__).parent
+
+
 @app.get("/")
 async def gallery_page(request: Request):
+
+    if not request.session.get("user"):
+        return RedirectResponse("/login")
+
+    html = (BASE_DIR / "mw-archiver-test.html").read_text()
+    return HTMLResponse(html)
 
     # 没登录跳转登录页
     if not request.session.get("user"):
