@@ -1158,13 +1158,24 @@ def scan_gallery(cfg) -> List[dict]:
 
 
 app = FastAPI()
+
+# Session middleware
 app.add_middleware(
     SessionMiddleware,
     secret_key="makerworld-secret-key",
 )
+
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    @app.middleware("http")
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 登录验证 middleware
+@app.middleware("http")
 async def auth_middleware(request: Request, call_next):
 
     path = request.url.path
@@ -1195,11 +1206,7 @@ async def auth_middleware(request: Request, call_next):
             return RedirectResponse("/login")
 
     return await call_next(request)
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 CFG = load_config()
 ensure_manual_counter_file(CFG)
