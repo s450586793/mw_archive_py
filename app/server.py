@@ -1289,8 +1289,13 @@ def check_login(request: Request):
         
 @app.get("/")
 async def gallery_page(request: Request):
+
+    # 没登录跳转登录页
     if not request.session.get("user"):
         return RedirectResponse("/login")
+
+    # 已登录显示页面
+    return HTMLResponse(open("mw-archiver-test.html").read())
 
 
 @app.get("/config")
