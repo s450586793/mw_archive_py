@@ -224,7 +224,6 @@ Chrome 插件：
 - `scripts/sync_version.py`：将 `version.yml` 的版本同步到项目文件。
 - `scripts/release_tag.ps1`：一键执行“版本同步 -> commit -> 打 tag -> push”；推送 `v*` tag 后会由 GitHub Actions 自动创建 Release。
 - `scripts/rebuild_index_from_meta.py`：根据 `meta.json` 重建归档页面（兼容场景）。
-- `scripts/patch_attachments.py`、`scripts/patch_printed.py`：历史数据补丁脚本。
 
 ## 文档目录
 - [api.md (API 接口文档)](doc/readme/api.md)
