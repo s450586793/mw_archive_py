@@ -5,6 +5,8 @@
 # - 执行前会展示提交差异与文件变更统计，仅一次人工确认后继续。
 # - 若已存在 dev -> main 的打开状态 PR，则复用该 PR 直接执行合并。
 # - 合并策略使用 merge commit（等价于 gh pr merge --merge）。
+# - 若环境中未安装 gh，脚本会自动降级为纯 git 模式：
+#   使用临时 worktree 在后台完成 merge commit 并 push 到 base 分支。
 #
 # 用法：
 #   bash scripts/merge2main.sh
@@ -12,7 +14,7 @@
 #
 # 依赖：
 # - git
-# - gh（GitHub CLI，且已登录：gh auth login）
+# - gh（可选；安装并登录后可走 PR 合并链路）
 
 set -euo pipefail
 
@@ -51,10 +53,6 @@ if ! command -v git >/dev/null 2>&1; then
   echo "错误：未找到 git 命令"
   exit 1
 fi
-if ! command -v gh >/dev/null 2>&1; then
-  echo "错误：未找到 gh 命令，请先安装 GitHub CLI"
-  exit 1
-fi
 
 # 确保当前目录在 git 仓库内。
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -62,10 +60,18 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-# 确保 gh 已登录，后续 create/merge PR 才能执行。
-if ! gh auth status >/dev/null 2>&1; then
-  echo "错误：GitHub CLI 未登录，请先执行 gh auth login"
-  exit 1
+# 检测 gh 可用性：
+# - 仅当“安装了 gh 且已登录”时启用 PR 合并链路
+# - 否则自动使用纯 git 降级链路，避免脚本直接中断
+GH_AVAILABLE="false"
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    GH_AVAILABLE="true"
+  else
+    echo "提示：检测到 gh 命令但未登录，将使用纯 git 模式合并。"
+  fi
+else
+  echo "提示：未检测到 gh 命令，将使用纯 git 模式合并。"
 fi
 
 echo "正在同步远端分支信息..."
@@ -105,33 +111,61 @@ git --no-pager diff --stat "origin/$BASE_BRANCH...origin/$HEAD_BRANCH"
 echo "============================================"
 echo ""
 
-read -r -p "确认以上变更无误并继续执行（创建/复用 PR + 立即合并）? 输入 y 继续，其它任意键取消: " CONFIRM_DIFF
+read -r -p "确认以上变更无误并继续执行合并? 输入 y 继续，其它任意键取消: " CONFIRM_DIFF
 if [[ "$CONFIRM_DIFF" != "y" && "$CONFIRM_DIFF" != "Y" ]]; then
   echo "已取消操作。"
   exit 1
 fi
 
-# 先尝试查找是否已有打开的 PR（避免重复创建）。
-EXISTING_PR_NUMBER="$(gh pr list \
-  --base "$BASE_BRANCH" \
-  --head "$HEAD_BRANCH" \
-  --state open \
-  --json number \
-  --jq '.[0].number')"
+if [[ "$GH_AVAILABLE" == "true" ]]; then
+  # PR 模式：先尝试查找是否已有打开的 PR（避免重复创建）。
+  EXISTING_PR_NUMBER="$(gh pr list \
+    --base "$BASE_BRANCH" \
+    --head "$HEAD_BRANCH" \
+    --state open \
+    --json number \
+    --jq '.[0].number')"
 
-PR_REF=""
-if [[ -n "$EXISTING_PR_NUMBER" && "$EXISTING_PR_NUMBER" != "null" ]]; then
-  PR_REF="$EXISTING_PR_NUMBER"
-  echo "检测到已存在打开的 PR：#$PR_REF，将复用该 PR 继续合并。"
+  PR_REF=""
+  if [[ -n "$EXISTING_PR_NUMBER" && "$EXISTING_PR_NUMBER" != "null" ]]; then
+    PR_REF="$EXISTING_PR_NUMBER"
+    echo "检测到已存在打开的 PR：#$PR_REF，将复用该 PR 继续合并。"
+  else
+    echo "未发现打开的 PR，正在创建新 PR..."
+    # 使用 --fill 自动从提交信息生成标题和描述，减少手工输入。
+    PR_REF="$(gh pr create --base "$BASE_BRANCH" --head "$HEAD_BRANCH" --fill)"
+    echo "PR 已创建：$PR_REF"
+  fi
+
+  echo "正在合并 PR..."
+  gh pr merge "$PR_REF" --merge --delete-branch=false
 else
-  echo "未发现打开的 PR，正在创建新 PR..."
-  # 使用 --fill 自动从提交信息生成标题和描述，减少手工输入。
-  PR_REF="$(gh pr create --base "$BASE_BRANCH" --head "$HEAD_BRANCH" --fill)"
-  echo "PR 已创建：$PR_REF"
-fi
+  # 纯 git 模式：不切换当前工作目录分支，使用临时 worktree 完成 merge。
+  TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t merge2main)"
+  TMP_BRANCH="tmp_merge_${BASE_BRANCH}_${HEAD_BRANCH}_$$"
 
-echo "正在合并 PR..."
-gh pr merge "$PR_REF" --merge --delete-branch=false
+  cleanup() {
+    # 清理顺序：先移除 worktree，再删除临时本地分支。
+    git worktree remove --force "$TMP_DIR" >/dev/null 2>&1 || true
+    git branch -D "$TMP_BRANCH" >/dev/null 2>&1 || true
+  }
+  trap cleanup EXIT
+
+  echo "正在使用纯 git 模式合并（临时 worktree）..."
+  git worktree add -f -B "$TMP_BRANCH" "$TMP_DIR" "origin/$BASE_BRANCH" >/dev/null
+
+  # 在临时 worktree 内执行 merge，避免影响当前分支工作区。
+  pushd "$TMP_DIR" >/dev/null
+  if ! git merge --no-ff --no-edit "origin/$HEAD_BRANCH"; then
+    echo "错误：自动合并失败，存在冲突，请手动处理后再发布。"
+    popd >/dev/null
+    exit 1
+  fi
+
+  # 将合并结果推送到远端 base 分支。
+  git push origin "HEAD:$BASE_BRANCH"
+  popd >/dev/null
+fi
 
 echo ""
 echo "合并完成：$HEAD_BRANCH -> $BASE_BRANCH"
