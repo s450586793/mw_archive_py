@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from notify_dispatcher import NotificationDispatcher
 from archiver import (
     archive_model,
     build_index_html,
@@ -76,27 +77,51 @@ DEFAULT_GALLERY_FLAGS = {
 DEFAULT_COOKIE_STORE = {
     "cn": [],
     "global": [],
+    "_meta": {
+        "rr_index": {
+            "cn": 0,
+            "global": 0,
+        }
+    },
 }
+COOKIE_STATUS_ACTIVE = "active"
+COOKIE_STATUS_COOLDOWN = "cooldown"
+COOKIE_STATUS_INVALID = "invalid"
+COOKIE_PLATFORM_SET = {"cn", "global"}
+COOKIE_COOLDOWN_SECONDS = 30 * 60
 
 
-def load_project_version() -> str:
-    """读取 app/version.yml 中的 project_version。"""
+def load_version_values() -> dict:
+    """读取 app/version.yml 中的简单 key:value 配置。"""
     for version_file in VERSION_FILE_CANDIDATES:
         if not version_file.exists():
             continue
         try:
+            values = {}
             for raw in version_file.read_text(encoding="utf-8").splitlines():
                 line = raw.strip()
                 if not line or line.startswith("#") or ":" not in line:
                     continue
                 key, value = line.split(":", 1)
-                if key.strip() == "project_version":
-                    ver = value.strip().strip("'\"")
-                    if ver:
-                        return ver
+                values[key.strip()] = value.strip().strip("'\"")
+            if values:
+                return values
         except Exception:
             continue
+    return {}
+
+
+def load_project_version() -> str:
+    """读取 app/version.yml 中的 project_version。"""
+    ver = str(load_version_values().get("project_version") or "").strip()
+    if ver:
+        return ver
     return "0.0.0"
+
+
+def is_multi_cookie_enabled() -> bool:
+    raw = str(load_version_values().get("multi_cookie_enabled") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def to_short_version(version: str) -> str:
@@ -873,27 +898,107 @@ def ensure_config_dir():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def parse_iso_datetime(value: str) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
 def _normalize_cookie_store(data) -> tuple[dict, bool]:
     changed = False
     if not isinstance(data, dict):
         data = deepcopy(DEFAULT_COOKIE_STORE)
         changed = True
 
-    out = {}
+    out = {"_meta": {"rr_index": {"cn": 0, "global": 0}}}
+    meta = data.get("_meta") if isinstance(data.get("_meta"), dict) else {}
+    rr_raw = meta.get("rr_index") if isinstance(meta.get("rr_index"), dict) else {}
+    rr_norm = {}
+    for key in ("cn", "global"):
+        try:
+            rr_norm[key] = max(int(rr_raw.get(key) or 0), 0)
+        except Exception:
+            rr_norm[key] = 0
+            changed = True
+    out["_meta"]["rr_index"] = rr_norm
+
     for key in ("cn", "global"):
         raw = data.get(key)
+        items = []
         if isinstance(raw, list):
-            values = [str(x or "").strip() for x in raw if str(x or "").strip()]
+            for item in raw:
+                if isinstance(item, dict):
+                    value = str(item.get("value") or "").strip()
+                    if not value:
+                        continue
+                    status = str(item.get("status") or COOKIE_STATUS_ACTIVE).strip().lower()
+                    if status not in {COOKIE_STATUS_ACTIVE, COOKIE_STATUS_COOLDOWN, COOKIE_STATUS_INVALID}:
+                        status = COOKIE_STATUS_ACTIVE
+                        changed = True
+                    cooldown_until = str(item.get("cooldown_until") or "").strip()
+                    if status == COOKIE_STATUS_COOLDOWN:
+                        until_dt = parse_iso_datetime(cooldown_until)
+                        if until_dt and until_dt <= datetime.now():
+                            status = COOKIE_STATUS_ACTIVE
+                            cooldown_until = ""
+                            changed = True
+                    entry = {
+                        "value": value,
+                        "status": status,
+                        "label": str(item.get("label") or "").strip(),
+                        "last_error": str(item.get("last_error") or "").strip(),
+                        "last_used_at": str(item.get("last_used_at") or "").strip(),
+                        "updated_at": str(item.get("updated_at") or "").strip(),
+                        "cooldown_until": cooldown_until,
+                        "success_count": max(int(item.get("success_count") or 0), 0),
+                        "failure_count": max(int(item.get("failure_count") or 0), 0),
+                    }
+                    items.append(entry)
+                else:
+                    value = str(item or "").strip()
+                    if not value:
+                        continue
+                    items.append({
+                        "value": value,
+                        "status": COOKIE_STATUS_ACTIVE,
+                        "label": "",
+                        "last_error": "",
+                        "last_used_at": "",
+                        "updated_at": "",
+                        "cooldown_until": "",
+                        "success_count": 0,
+                        "failure_count": 0,
+                    })
+                    changed = True
         elif isinstance(raw, str):
-            values = [raw.strip()] if raw.strip() else []
+            value = raw.strip()
+            items = [{
+                "value": value,
+                "status": COOKIE_STATUS_ACTIVE,
+                "label": "",
+                "last_error": "",
+                "last_used_at": "",
+                "updated_at": "",
+                "cooldown_until": "",
+                "success_count": 0,
+                "failure_count": 0,
+            }] if value else []
             changed = True
         else:
-            values = []
+            items = []
             if key not in data:
                 changed = True
-        out[key] = values
+        out[key] = items
 
-    if set(data.keys()) != {"cn", "global"}:
+    if set(data.keys()) != {"cn", "global", "_meta"}:
         changed = True
     return out, changed
 
@@ -948,6 +1053,239 @@ def save_cookie_store(cfg: Optional[dict], store: dict):
     normalized, _changed = _normalize_cookie_store(store)
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
     cookie_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_cookie_entries(cfg, platform: str) -> List[dict]:
+    store = load_cookie_store(cfg)
+    if platform not in COOKIE_PLATFORM_SET:
+        return []
+    items = store.get(platform)
+    return items if isinstance(items, list) else []
+
+
+def save_cookie_entries(cfg, platform: str, entries: List[dict]):
+    if platform not in COOKIE_PLATFORM_SET:
+        raise ValueError("platform 仅支持 cn 或 global")
+    store = load_cookie_store(cfg)
+    store[platform] = entries
+    save_cookie_store(cfg, store)
+
+
+def detect_cookie_platform(url: str) -> str:
+    text = str(url or "").strip().lower()
+    if "makerworld.com.cn" in text:
+        return "cn"
+    if "makerworld.com/" in text or text.endswith("makerworld.com"):
+        return "global"
+    return "cn"
+
+
+def should_try_multiple_cookies() -> bool:
+    return is_multi_cookie_enabled()
+
+
+def _is_cookie_entry_available(entry: dict) -> bool:
+    value = str((entry or {}).get("value") or "").strip()
+    if not value:
+        return False
+    status = str((entry or {}).get("status") or COOKIE_STATUS_ACTIVE).strip().lower()
+    if status == COOKIE_STATUS_INVALID:
+        return False
+    if status == COOKIE_STATUS_COOLDOWN:
+        until_dt = parse_iso_datetime(str((entry or {}).get("cooldown_until") or ""))
+        if until_dt and until_dt > datetime.now():
+            return False
+    return True
+
+
+def build_cookie_candidate_order(cfg, platform: str) -> List[dict]:
+    store = load_cookie_store(cfg)
+    entries = store.get(platform) if isinstance(store.get(platform), list) else []
+    if not entries:
+        return []
+
+    if not should_try_multiple_cookies():
+        first = entries[0] if entries else None
+        if first and _is_cookie_entry_available(first):
+            return [{"index": 0, "entry": first}]
+        if first:
+            return [{"index": 0, "entry": first}]
+        return []
+
+    rr_meta = (((store.get("_meta") or {}).get("rr_index") or {}))
+    try:
+        start_idx = max(int(rr_meta.get(platform) or 0), 0)
+    except Exception:
+        start_idx = 0
+
+    indexed = [{"index": idx, "entry": item} for idx, item in enumerate(entries)]
+    available = [x for x in indexed if _is_cookie_entry_available(x["entry"])]
+    if not available:
+        return indexed
+
+    start_idx = start_idx % len(available)
+    return available[start_idx:] + available[:start_idx]
+
+
+def update_cookie_rotation_cursor(cfg, platform: str, index: int):
+    if platform not in COOKIE_PLATFORM_SET:
+        return
+    store = load_cookie_store(cfg)
+    rr_meta = ((store.get("_meta") or {}).get("rr_index") or {})
+    rr_meta[platform] = max(int(index) + 1, 0)
+    store.setdefault("_meta", {})["rr_index"] = rr_meta
+    save_cookie_store(cfg, store)
+
+
+def mark_cookie_result(cfg, platform: str, index: int, status: str, error_text: str = ""):
+    if platform not in COOKIE_PLATFORM_SET:
+        return
+    store = load_cookie_store(cfg)
+    entries = store.get(platform) if isinstance(store.get(platform), list) else []
+    if index < 0 or index >= len(entries):
+        return
+    item = dict(entries[index] or {})
+    item["updated_at"] = now_iso()
+    if status == "success":
+        item["status"] = COOKIE_STATUS_ACTIVE
+        item["cooldown_until"] = ""
+        item["last_error"] = ""
+        item["last_used_at"] = item["updated_at"]
+        item["success_count"] = max(int(item.get("success_count") or 0), 0) + 1
+        entries[index] = item
+        store[platform] = entries
+        save_cookie_store(cfg, store)
+        update_cookie_rotation_cursor(cfg, platform, index)
+        return
+
+    item["failure_count"] = max(int(item.get("failure_count") or 0), 0) + 1
+    item["last_error"] = str(error_text or "").strip()
+    if status == COOKIE_STATUS_INVALID:
+        item["status"] = COOKIE_STATUS_INVALID
+        item["cooldown_until"] = ""
+    elif status == COOKIE_STATUS_COOLDOWN:
+        item["status"] = COOKIE_STATUS_COOLDOWN
+        item["cooldown_until"] = datetime.fromtimestamp(datetime.now().timestamp() + COOKIE_COOLDOWN_SECONDS).isoformat()
+    else:
+        item["status"] = COOKIE_STATUS_ACTIVE
+    entries[index] = item
+    store[platform] = entries
+    save_cookie_store(cfg, store)
+
+
+def build_alert_payload(title: str, summary: str = "", lines: Optional[List[str]] = None) -> dict:
+    return {
+        "title": str(title or "通知").strip(),
+        "summary": str(summary or "").strip(),
+        "lines": [str(x or "").strip() for x in (lines or []) if str(x or "").strip()],
+    }
+
+
+def format_cookie_platform_label(platform: str) -> str:
+    return "国际平台" if str(platform or "").strip().lower() == "global" else "国内平台"
+
+
+def notify_cookie_download_issue(action_name: str, platform: str, index: int, status: str, error_text: str = ""):
+    normalized = str(status or "").strip().lower()
+    if normalized not in {COOKIE_STATUS_INVALID, COOKIE_STATUS_COOLDOWN}:
+        return
+    cookie_name = f"{format_cookie_platform_label(platform)} Cookie #{index + 1}"
+    if normalized == COOKIE_STATUS_COOLDOWN:
+        title = "Cookie 限流告警"
+        state_text = "冷却中"
+        reason = "触发限流，已进入冷却状态"
+    else:
+        title = "Cookie 失效告警"
+        state_text = "失效/待验证"
+        reason = "疑似失效或触发验证"
+    payload = build_alert_payload(
+        title=title,
+        summary=f"{action_name}失败",
+        lines=[
+            f"平台：{format_cookie_platform_label(platform)}",
+            f"Cookie：#{index + 1}",
+            f"状态：{state_text}",
+            f"说明：{reason}",
+            f"错误：{str(error_text).strip()[:300]}" if error_text else "",
+        ],
+    )
+    NOTIFIER.notify_alert(payload)
+
+
+def notify_archive_missing_download_issue(result: dict):
+    missing = result.get("missing_3mf") or []
+    if not missing:
+        return
+    cookie_ctx = result.get("cookie_context") if isinstance(result.get("cookie_context"), dict) else {}
+    platform = str(cookie_ctx.get("platform") or "cn").strip().lower()
+    try:
+        index = max(int(cookie_ctx.get("index") or 0), 0)
+    except Exception:
+        index = 0
+    count = len(missing)
+    payload = build_alert_payload(
+        title="Cookie 失效告警",
+        summary="模型归档存在 3MF 下载失败",
+        lines=[
+            f"平台：{format_cookie_platform_label(platform)}",
+            f"Cookie：#{index + 1}",
+            "状态：失效/待验证",
+            f"失败数量：{count}",
+            "说明：当前 Cookie 可能触发了验证或下载受限",
+            "建议：先手动下载任意模型完成验证，再执行缺失重试",
+        ],
+    )
+    NOTIFIER.notify_alert(payload)
+
+
+def classify_cookie_error(err: Exception) -> Optional[str]:
+    if isinstance(err, requests.HTTPError):
+        resp = err.response
+        code = resp.status_code if resp is not None else 0
+        if code in (401, 403):
+            return COOKIE_STATUS_INVALID
+        if code == 429:
+            return COOKIE_STATUS_COOLDOWN
+    text = str(err or "")
+    if "cf_clearance" in text or "Cloudflare" in text:
+        return COOKIE_STATUS_INVALID
+    return None
+
+
+def run_with_cookie_failover(cfg, target_url: str, action_name: str, runner, notify_cookie_issue: bool = False):
+    platform = detect_cookie_platform(target_url)
+    candidates = build_cookie_candidate_order(cfg, platform)
+    if not candidates:
+        raise ValueError(f"请先设置 {platform} 平台 Cookie")
+
+    last_err = None
+    attempted = []
+    for candidate in candidates:
+        idx = int(candidate["index"])
+        entry = candidate["entry"] if isinstance(candidate.get("entry"), dict) else {}
+        cookie = str(entry.get("value") or "").strip()
+        if not cookie:
+            continue
+        logger.info("%s: 使用 %s Cookie #%s", action_name, platform, idx + 1)
+        try:
+            result = runner(cookie, platform, idx, entry)
+            mark_cookie_result(cfg, platform, idx, "success")
+            return result
+        except Exception as err:
+            last_err = err
+            attempted.append(idx + 1)
+            status = classify_cookie_error(err)
+            if status:
+                mark_cookie_result(cfg, platform, idx, status, str(err))
+                if notify_cookie_issue:
+                    notify_cookie_download_issue(action_name, platform, idx, status, str(err))
+                logger.warning("%s: %s Cookie #%s 标记为 %s", action_name, platform, idx + 1, status)
+                continue
+            raise
+
+    if last_err is not None:
+        raise last_err
+    raise ValueError(f"{action_name} 未找到可用 Cookie，已尝试: {attempted}")
 
 
 def ensure_runtime_support_files(cfg: Optional[dict] = None):
@@ -1055,10 +1393,9 @@ def save_gallery_flags(flags: dict):
 
 
 def read_cookie(cfg, platform: str = "cn") -> str:
-    store = load_cookie_store(cfg)
-    values = store.get(platform) if isinstance(store.get(platform), list) else []
-    if values:
-        return str(values[0] or "").strip()
+    entries = get_cookie_entries(cfg, platform)
+    if entries:
+        return str((entries[0] or {}).get("value") or "").strip()
     return ""
 
 
@@ -1066,17 +1403,36 @@ def write_cookie(cfg, cookie: str, platform: str = "cn", append: bool = False):
     platform_key = str(platform or "cn").strip().lower()
     if platform_key not in {"cn", "global"}:
         raise ValueError("platform 仅支持 cn 或 global")
-    store = load_cookie_store(cfg)
     value = str(cookie or "").strip()
+    entries = get_cookie_entries(cfg, platform_key)
     if append:
-        current = store.get(platform_key) if isinstance(store.get(platform_key), list) else []
-        values = [x for x in current if str(x or "").strip()]
-        if value:
-            values.append(value)
-        store[platform_key] = list(dict.fromkeys(values))
+        existing_values = [str((x or {}).get("value") or "").strip() for x in entries]
+        existing_values = [x for x in existing_values if x]
+        if value and value not in existing_values:
+            entries.append({
+                "value": value,
+                "status": COOKIE_STATUS_ACTIVE,
+                "label": "",
+                "last_error": "",
+                "last_used_at": "",
+                "updated_at": now_iso(),
+                "cooldown_until": "",
+                "success_count": 0,
+                "failure_count": 0,
+            })
     else:
-        store[platform_key] = [value] if value else []
-    save_cookie_store(cfg, store)
+        entries = [{
+            "value": value,
+            "status": COOKIE_STATUS_ACTIVE,
+            "label": "",
+            "last_error": "",
+            "last_used_at": "",
+            "updated_at": now_iso(),
+            "cooldown_until": "",
+            "success_count": 0,
+            "failure_count": 0,
+        }] if value else []
+    save_cookie_entries(cfg, platform_key, entries)
     logger.info("Cookie 更新")
     # 额外记录更新时间
     with (Path(cfg["logs_dir"]) / "cookie.log").open("a", encoding="utf-8") as f:
@@ -1194,14 +1550,37 @@ def classify_archive_exception(err: Exception) -> tuple[str, str]:
         resp = err.response
         code = resp.status_code if resp is not None else 0
         if code in (401, 403):
-            return "Cookie 失效告警", "请求被拒绝（401/403），请更新 Cookie 后重试。"
+            return "归档失败告警", "请求被拒绝（401/403），请稍后重试或检查当前访问环境。"
         if code == 429:
             return "限流告警", "请求触发限流（429），请稍后重试。"
         return "归档失败告警", f"HTTP 错误：{code}"
     text = str(err)
     if "cf_clearance" in text or "Cloudflare" in text:
-        return "Cookie 失效告警", "检测到 Cloudflare 验证，请更新 Cookie（含 cf_clearance）。"
+        return "归档失败告警", "检测到 Cloudflare 验证，请稍后重试或检查当前访问环境。"
     return "归档失败告警", text or "未知错误"
+
+
+def infer_model_platform(meta: dict, inst: Optional[dict] = None) -> str:
+    if isinstance(inst, dict):
+        api_url = str(inst.get("apiUrl") or "").strip()
+        if api_url:
+            return detect_cookie_platform(api_url)
+    source_url = str((meta or {}).get("url") or "").strip()
+    if source_url:
+        return detect_cookie_platform(source_url)
+    return "cn"
+
+
+def normalize_model_source(meta: dict, dir_name: str = "", inst: Optional[dict] = None) -> str:
+    raw_source = str((meta or {}).get("source") or "").strip().lower()
+    if raw_source in {"mw_cn", "mw_global", "localmodel", "others"}:
+        return raw_source
+    if dir_name.startswith("LocalModel_"):
+        return "localmodel"
+    if dir_name.startswith("Others_"):
+        return "others"
+    platform = infer_model_platform(meta or {}, inst=inst)
+    return "mw_global" if platform == "global" else "mw_cn"
 
 
 def parse_missing(cfg) -> List[dict]:
@@ -1308,16 +1687,12 @@ def choose_unique_instance_filename(
         idx += 1
 
 
-def retry_missing_downloads(cfg, cookie: str):
+def retry_missing_downloads(cfg):
     missing_log = Path(cfg["logs_dir"]) / "missing_3mf.log"
     if not missing_log.exists():
         return {"processed": 0, "success": 0, "failed": 0, "details": []}
 
     lines = [line for line in missing_log.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload)"})
-    session.cookies.update(parse_cookies(cookie))
 
     remaining_lines = []
     details = []
@@ -1351,14 +1726,27 @@ def retry_missing_downloads(cfg, cookie: str):
             remaining_lines.append(line)
             continue
 
-        api_url = target.get("apiUrl") or f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id_str}/f3mf?type=download&fileType="
+        platform = infer_model_platform(meta, target)
+        default_host = "makerworld.com.cn" if platform == "cn" else "makerworld.com"
+        api_url = target.get("apiUrl") or f"https://{default_host}/api/v1/design-service/instance/{inst_id_str}/f3mf?type=download&fileType="
         try:
             inst_id_int = int(inst_id_str)
         except Exception:
             inst_id_int = inst_id_str
 
+        selected_cookie = ""
         try:
-            name3mf, dl_url, used_api_url = fetch_instance_3mf(session, inst_id_int, cookie, api_url)
+            def _runner(cookie: str, _platform: str, _cookie_index: int, _entry: dict):
+                nonlocal selected_cookie
+                selected_cookie = cookie
+                session = requests.Session()
+                session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload)"})
+                session.cookies.update(parse_cookies(cookie))
+                return fetch_instance_3mf(session, inst_id_int, cookie, api_url)
+
+            name3mf, dl_url, used_api_url = run_with_cookie_failover(
+                cfg, api_url, f"缺失 3MF 重试 {inst_id_str}", _runner, notify_cookie_issue=True
+            )
         except Exception as e:
             logger.error("实例 %s 获取 3MF 失败: %s", inst_id_str, e)
             details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"接口获取失败: {e}"})
@@ -1380,6 +1768,9 @@ def retry_missing_downloads(cfg, cookie: str):
                 used_existing = True
                 logger.info("实例 %s 已存在文件 %s，跳过重新下载", inst_id_str, dest)
             else:
+                session = requests.Session()
+                session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload)"})
+                session.cookies.update(parse_cookies(selected_cookie))
                 download_file(session, dl_url, dest)
         except Exception as e:
             logger.error("实例 %s 下载 3MF 失败: %s", inst_id_str, e)
@@ -1416,14 +1807,10 @@ def retry_missing_downloads(cfg, cookie: str):
     return {"processed": len(lines), "success": success_cnt, "failed": failed_cnt, "details": details}
 
 
-def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
+def redownload_instance_by_id(cfg, inst_id: int):
     """
     按实例 ID 扫描已下载模型，重新获取下载地址并覆盖保存到 instances 目录。
     """
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-One)"})
-    session.cookies.update(parse_cookies(cookie))
-
     root = Path(cfg["download_dir"])
     found = 0
     success = 0
@@ -1439,9 +1826,22 @@ def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
         if not target:
             continue
         found += 1
-        api_url = target.get("apiUrl") or f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
+        platform = infer_model_platform(meta, target)
+        default_host = "makerworld.com.cn" if platform == "cn" else "makerworld.com"
+        api_url = target.get("apiUrl") or f"https://{default_host}/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
+        selected_cookie = ""
         try:
-            name3mf, dl_url, used_api_url = fetch_instance_3mf(session, inst_id, cookie, api_url)
+            def _runner(cookie: str, _platform: str, _cookie_index: int, _entry: dict):
+                nonlocal selected_cookie
+                selected_cookie = cookie
+                session = requests.Session()
+                session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-One)"})
+                session.cookies.update(parse_cookies(cookie))
+                return fetch_instance_3mf(session, inst_id, cookie, api_url)
+
+            name3mf, dl_url, used_api_url = run_with_cookie_failover(
+                cfg, api_url, f"实例重下 {inst_id}", _runner, notify_cookie_issue=True
+            )
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
             continue
@@ -1461,6 +1861,9 @@ def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
             except Exception:
                 pass
         try:
+            session = requests.Session()
+            session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-One)"})
+            session.cookies.update(parse_cookies(selected_cookie))
             download_file(session, dl_url, dest)
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
@@ -1495,14 +1898,10 @@ def redownload_instance_by_id(cfg, cookie: str, inst_id: int):
     return {"found": found, "success": success, "failed": max(found - success, 0), "details": details}
 
 
-def redownload_model_by_id(cfg, cookie: str, model_id: int):
+def redownload_model_by_id(cfg, model_id: int):
     """
     按模型 ID (目录名 MW_{id}_*) 扫描，针对其中所有 instances 的 apiUrl 重新下载并更新 meta。
     """
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-Model)"})
-    session.cookies.update(parse_cookies(cookie))
-
     root = Path(cfg["download_dir"])
     targets = list(root.glob(f"MW_{model_id}_*/meta.json"))
     if not targets:
@@ -1529,13 +1928,26 @@ def redownload_model_by_id(cfg, cookie: str, model_id: int):
         for inst in instances:
             processed += 1
             inst_id = inst.get("id")
-            api_url = inst.get("apiUrl") or f"https://makerworld.com.cn/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
+            platform = infer_model_platform(meta, inst)
+            default_host = "makerworld.com.cn" if platform == "cn" else "makerworld.com"
+            api_url = inst.get("apiUrl") or f"https://{default_host}/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
             try:
                 inst_id_int = int(inst_id) if inst_id is not None else inst_id
             except Exception:
                 inst_id_int = inst_id
+            selected_cookie = ""
             try:
-                name3mf, dl_url, used_api_url = fetch_instance_3mf(session, inst_id_int, cookie, api_url)
+                def _runner(cookie: str, _platform: str, _cookie_index: int, _entry: dict):
+                    nonlocal selected_cookie
+                    selected_cookie = cookie
+                    session = requests.Session()
+                    session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-Model)"})
+                    session.cookies.update(parse_cookies(cookie))
+                    return fetch_instance_3mf(session, inst_id_int, cookie, api_url)
+
+                name3mf, dl_url, used_api_url = run_with_cookie_failover(
+                    cfg, api_url, f"模型重下 {model_id}/{inst_id}", _runner, notify_cookie_issue=True
+                )
             except Exception as e:
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
                 continue
@@ -1552,6 +1964,9 @@ def redownload_model_by_id(cfg, cookie: str, model_id: int):
                 except Exception:
                     pass
             try:
+                session = requests.Session()
+                session.headers.update({"User-Agent": "Mozilla/5.0 (MW-Redownload-Model)"})
+                session.cookies.update(parse_cookies(selected_cookie))
                 download_file(session, dl_url, dest)
             except Exception as e:
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
@@ -1617,13 +2032,7 @@ def scan_gallery(cfg) -> List[dict]:
                     published_at = ts
             author = data.get("author") or {}
             collected_at = resolve_collect_iso(data, meta)
-            raw_source = str(data.get("source") or "").strip().lower()
-            if d.name.startswith("MW_"):
-                source_value = "makerworld"
-            elif raw_source in {"localmodel", "others"} or d.name.startswith("LocalModel_") or d.name.startswith("Others_"):
-                source_value = "localmodel"
-            else:
-                source_value = "localmodel"
+            source_value = normalize_model_source(data, d.name)
             items.append({
                 "baseName": data.get("baseName") or d.name,
                 "title": data.get("title"),
@@ -1680,6 +2089,8 @@ TG_SERVICE = TelegramPushService(
     on_get_base_url=tg_get_base_url_text,
     on_set_base_url=tg_set_base_url,
 )
+NOTIFIER = NotificationDispatcher(logger)
+NOTIFIER.register("telegram", TG_SERVICE)
 
 
 def build_archive_notify_payload(result: dict, final_dir: Path) -> dict:
@@ -1711,28 +2122,29 @@ def archive_model_with_lock(url: str) -> dict:
     model_url = extract_makerworld_model_url(url)
     if not model_url:
         raise ValueError("链接格式无效，仅支持 makerworld 模型链接")
-    cookie = read_cookie(CFG)
-    if not cookie:
-        raise ValueError("请先设置 cookie")
 
     with ARCHIVE_LOCK:
-        reset_tmp_dir(TMP_DIR)
-        logger.info("使用 Cookie 片段: %s", cookie[:200])
-        result = archive_model(
-            model_url,
-            cookie,
-            TMP_DIR,
-            Path(CFG["logs_dir"]),
-            logger,
-            existing_root=Path(CFG["download_dir"]),
-        )
-        tmp_work_dir = Path(result.get("work_dir") or "")
-        final_dir = finalize_tmp_archive(tmp_work_dir, Path(CFG["download_dir"]), logger)
-        result["work_dir"] = str(final_dir.resolve())
-        action = result.get("action") or "created"
-        result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
-        result["notify_payload"] = build_archive_notify_payload(result, final_dir)
-        return result
+        def _runner(cookie: str, platform: str, cookie_index: int, _entry: dict):
+            reset_tmp_dir(TMP_DIR)
+            logger.info("归档使用 %s Cookie #%s", platform, cookie_index + 1)
+            result = archive_model(
+                model_url,
+                cookie,
+                TMP_DIR,
+                Path(CFG["logs_dir"]),
+                logger,
+                existing_root=Path(CFG["download_dir"]),
+            )
+            tmp_work_dir = Path(result.get("work_dir") or "")
+            final_dir = finalize_tmp_archive(tmp_work_dir, Path(CFG["download_dir"]), logger)
+            result["work_dir"] = str(final_dir.resolve())
+            action = result.get("action") or "created"
+            result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
+            result["notify_payload"] = build_archive_notify_payload(result, final_dir)
+            result["cookie_context"] = {"platform": platform, "index": cookie_index}
+            return result
+
+        return run_with_cookie_failover(CFG, model_url, "模型归档", _runner)
 
 
 def _tg_archive_callback(url: str) -> dict:
@@ -1740,7 +2152,7 @@ def _tg_archive_callback(url: str) -> dict:
         return archive_model_with_lock(url)
     except Exception as e:
         title, detail = classify_archive_exception(e)
-        TG_SERVICE.notify_alert(title, detail)
+        NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
         raise
 
 
@@ -1748,10 +2160,7 @@ TG_SERVICE.set_archive_handler(_tg_archive_callback)
 
 
 def sync_telegram_service_state():
-    if TG_SERVICE.should_run():
-        TG_SERVICE.start()
-    else:
-        TG_SERVICE.stop()
+    NOTIFIER.start()
 
 
 @app.on_event("startup")
@@ -1761,7 +2170,7 @@ async def startup_events():
 
 @app.on_event("shutdown")
 async def shutdown_events():
-    TG_SERVICE.stop()
+    NOTIFIER.stop()
 
 
 @app.get("/")
@@ -1778,6 +2187,7 @@ async def config_page(request: Request):
             "request": request,
             "project_version": project_version,
             "project_version_short": to_short_version(project_version),
+            "multi_cookie_enabled": is_multi_cookie_enabled(),
         },
     )
 
@@ -1793,6 +2203,8 @@ async def api_config():
         "download_dir": cfg["download_dir"],
         "logs_dir": cfg["logs_dir"],
         "cookie_file": cfg["cookie_file"],
+        "multi_cookie_enabled": is_multi_cookie_enabled(),
+        "cookie_store": cookie_store,
         "cookie_counts": {
             "cn": len(cookie_store.get("cn") or []),
             "global": len(cookie_store.get("global") or []),
@@ -1840,7 +2252,7 @@ async def api_save_notify_config(body: dict):
 
 @app.post("/api/notify-test")
 async def api_notify_test():
-    result = TG_SERVICE.send_test_connection()
+    result = NOTIFIER.send_test_connection()
     if result.get("status") != "ok":
         raise HTTPException(400, result.get("message") or "测试连接失败")
     return result
@@ -1882,6 +2294,32 @@ async def api_cookie(body: dict):
     }
 
 
+@app.get("/api/cookies")
+async def api_get_cookies():
+    return {
+        "multi_cookie_enabled": is_multi_cookie_enabled(),
+        "cookie_store": load_cookie_store(CFG),
+        "cookie_file": CFG["cookie_file"],
+    }
+
+
+@app.post("/api/cookies")
+async def api_save_cookies(body: dict):
+    payload = body or {}
+    store = payload.get("cookie_store")
+    if not isinstance(store, dict):
+        raise HTTPException(400, "cookie_store 格式错误")
+    normalized, _changed = _normalize_cookie_store(store)
+    save_cookie_store(CFG, normalized)
+    return {
+        "status": "ok",
+        "updated_at": now_iso(),
+        "multi_cookie_enabled": is_multi_cookie_enabled(),
+        "cookie_store": load_cookie_store(CFG),
+        "cookie_file": CFG["cookie_file"],
+    }
+
+
 @app.post("/api/archive")
 async def api_archive(body: dict):
     url = (body or {}).get("url", "").strip()
@@ -1889,18 +2327,15 @@ async def api_archive(body: dict):
         raise HTTPException(400, "url 不能为空")
     try:
         result = archive_model_with_lock(url)
-        TG_SERVICE.notify_success(result.get("notify_payload") or {})
+        NOTIFIER.notify_success(result.get("notify_payload") or {})
         if len(result.get("missing_3mf") or []) > 0:
-            TG_SERVICE.notify_alert(
-                "下载失败告警",
-                "检测到部分 3MF 下载失败，可能触发了验证机制。请先手动下载任意模型完成验证，再执行缺失重试。",
-            )
+            notify_archive_missing_download_issue(result)
         return {"status": "ok", **result}
     except ValueError as e:
         err_text = str(e)
         if "链接格式无效" not in err_text:
             title, detail = classify_archive_exception(e)
-            TG_SERVICE.notify_alert(title, detail)
+            NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
         raise HTTPException(400, str(e))
     except requests.HTTPError as e:
         resp = e.response
@@ -1911,12 +2346,12 @@ async def api_archive(body: dict):
         else:
             logger.error("归档失败 HTTP: %s", e)
         title, detail = classify_archive_exception(e)
-        TG_SERVICE.notify_alert(title, detail)
+        NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
         raise HTTPException(500, f"归档失败: {e} 片段: {snippet}")
     except Exception as e:
         logger.exception("归档失败")
         title, detail = classify_archive_exception(e)
-        TG_SERVICE.notify_alert(title, detail)
+        NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
         raise HTTPException(500, f"归档失败: {e}")
     finally:
         try:
@@ -1946,11 +2381,8 @@ async def api_missing():
 
 @app.post("/api/logs/missing-3mf/redownload")
 async def api_redownload_missing():
-    cookie = read_cookie(CFG)
-    if not cookie:
-        raise HTTPException(400, "请先设置 cookie")
     try:
-        result = retry_missing_downloads(CFG, cookie)
+        result = retry_missing_downloads(CFG)
         return {"status": "ok", **result}
     except Exception as e:
         logger.exception("缺失 3MF 重试下载失败")
@@ -2067,11 +2499,8 @@ async def api_bambu_download_instance_named(model_dir: str, inst_id: int, displa
 
 @app.post("/api/instances/{inst_id}/redownload")
 async def api_redownload_instance(inst_id: int):
-    cookie = read_cookie(CFG)
-    if not cookie:
-        raise HTTPException(400, "请先设置 cookie")
     try:
-        result = redownload_instance_by_id(CFG, cookie, inst_id)
+        result = redownload_instance_by_id(CFG, inst_id)
         if result.get("found", 0) == 0:
             raise HTTPException(404, "未找到该实例")
         return {"status": "ok", **result}
@@ -2084,11 +2513,8 @@ async def api_redownload_instance(inst_id: int):
 
 @app.post("/api/models/{model_id}/redownload")
 async def api_redownload_model(model_id: int):
-    cookie = read_cookie(CFG)
-    if not cookie:
-        raise HTTPException(400, "请先设置 cookie")
     try:
-        result = redownload_model_by_id(CFG, cookie, model_id)
+        result = redownload_model_by_id(CFG, model_id)
         if result.get("processed", 0) == 0:
             raise HTTPException(404, "未找到该模型或 meta")
         return {"status": "ok", **result}
@@ -2873,6 +3299,7 @@ async def api_v2_model_meta(model_dir: str):
         ensure_collect_date(data, int(meta_path.stat().st_mtime))
         if not data.get("update_time"):
             data["update_time"] = datetime.fromtimestamp(meta_path.stat().st_mtime).isoformat()
+        data["source"] = normalize_model_source(data, model_dir)
 
         # 兼容历史归档：批量回填 instances[].fileName，减少前端/接口猜测成本
         instances_changed = False

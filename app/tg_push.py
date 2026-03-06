@@ -108,7 +108,24 @@ class TelegramPushService:
                     continue
             self._send_message(token, chat_id, text)
 
-    def notify_alert(self, title: str, detail: str):
+    def _format_alert_text(self, alert, detail: Optional[str] = None) -> str:
+        if isinstance(alert, dict):
+            title = str(alert.get("title") or "通知").strip()
+            summary = str(alert.get("summary") or "").strip()
+            lines = alert.get("lines") if isinstance(alert.get("lines"), list) else []
+            text_lines = [f"⚠️ {title}"]
+            if summary:
+                text_lines.append(summary)
+            for line in lines:
+                item = str(line or "").strip()
+                if item:
+                    text_lines.append(item)
+            return "\n".join(text_lines)
+        title = str(alert or "通知").strip()
+        body = str(detail or "").strip()
+        return f"⚠️ {title}\n{body}".strip()
+
+    def notify_alert(self, alert, detail: Optional[str] = None):
         cfg = self._cfg_getter()
         if not cfg.get("enable_push"):
             return
@@ -116,7 +133,7 @@ class TelegramPushService:
         chat_ids = self._target_chat_ids(cfg)
         if not token or not chat_ids:
             return
-        text = f"⚠️ {title}\n{detail}"
+        text = self._format_alert_text(alert, detail)
         for chat_id in chat_ids:
             self._send_message(token, chat_id, text)
 
@@ -317,7 +334,7 @@ class TelegramPushService:
             "• /help：查看命令说明\n"
             "• /cookies：查看当前 Cookie 状态和更新时间\n"
             "• /count：查看本地已归档模型总数\n"
-            "• /search 关键词：搜索库中模型标题并返回在线地址\n\n"
+            "• /search 关键词：搜索库中模型标题并返回在线地址\n"
             "• /url：查看当前在线地址前缀\n"
             "• /seturl 地址：设置在线地址前缀\n\n"
             "📎 也可以直接发送 MakerWorld 模型链接，机器人会自动触发归档。"
