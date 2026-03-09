@@ -62,6 +62,24 @@
         }
     }
 
+    function formatDateTime(dateStr) {
+        if (!dateStr) return '';
+        try {
+            var clean = String(dateStr).replace('Z', '+00:00');
+            var d = new Date(clean);
+            if (isNaN(d.getTime())) return dateStr;
+            var yyyy = d.getFullYear();
+            var mm = String(d.getMonth() + 1).padStart(2, '0');
+            var dd = String(d.getDate()).padStart(2, '0');
+            var hh = String(d.getHours()).padStart(2, '0');
+            var mi = String(d.getMinutes()).padStart(2, '0');
+            var ss = String(d.getSeconds()).padStart(2, '0');
+            return yyyy + '-' + mm + '-' + dd + ' ' + hh + ':' + mi + ':' + ss;
+        } catch (e) {
+            return dateStr || '';
+        }
+    }
+
     /** 提取文件名 */
     function toName(item) {
         if (!item) return null;
@@ -205,6 +223,7 @@
     // ============ DOM 渲染 ============
 
     var MODEL_DIR = '';
+    var CURRENT_META = null;
     var OFFLINE_API_BASE_KEY = 'mw_offline_api_base';
     var DEFAULT_OFFLINE_API_BASE = 'http://127.0.0.1:8000';
 
@@ -352,6 +371,27 @@
         el.innerHTML = '<i class="far fa-calendar-alt"></i> 采集于 ' + dateStr;
     }
 
+    function renderMetaExtras(meta) {
+        var el = document.getElementById('metaExtraList');
+        if (!el) return;
+        var category = String((meta && (meta.category || meta.modelCategory)) || '').trim();
+        var versionNote = String((meta && (meta.versionNote || meta.version_note)) || '').trim();
+        var items = [];
+        if (category) {
+            items.push('<span class="meta-extra__item"><i class="fas fa-folder-open"></i> 分类：' + esc(category) + '</span>');
+        }
+        if (versionNote) {
+            items.push('<span class="meta-extra__item"><i class="fas fa-code-branch"></i> 版本备注：' + esc(versionNote) + '</span>');
+        }
+        if (!items.length) {
+            el.classList.add('hidden');
+            el.innerHTML = '';
+            return;
+        }
+        el.classList.remove('hidden');
+        el.innerHTML = items.join('');
+    }
+
     function renderSource(meta) {
         var el = document.getElementById('sourceBadge');
         if (!el) return;
@@ -406,6 +446,11 @@
             return 'src="' + fileUrl(MODEL_DIR, 'images/' + toName(p1)) + '"';
         });
         document.getElementById('summaryContent').innerHTML = html;
+    }
+
+    function summaryEditorValue(meta) {
+        var s = (meta && meta.summary) || {};
+        return String(s.html || s.raw || s.text || '').trim();
     }
 
     // ============ 实例卡片 ============
@@ -753,21 +798,36 @@
             else msgEl.classList.remove('error');
         }
 
-        function renderList(files) {
+        function normalizeAttachmentItems(payload) {
+            if (!Array.isArray(payload)) return [];
+            return payload.map(function (item) {
+                if (item && typeof item === 'object') {
+                    return {
+                        name: String(item.name || item.fileName || item.filename || ''),
+                        size: Number(item.size || 0) || 0,
+                    };
+                }
+                return { name: String(item || ''), size: 0 };
+            }).filter(function (item) {
+                return !!item.name;
+            });
+        }
+
+        function renderList(items) {
             listEl.innerHTML = '';
-            if (!files || !files.length) {
+            if (!items || !items.length) {
                 var li = document.createElement('li');
                 li.className = 'attach-empty';
                 li.textContent = '暂无附件';
                 listEl.appendChild(li);
                 return;
             }
-            files.forEach(function (name) {
+            items.forEach(function (item) {
                 var li = document.createElement('li');
                 var link = document.createElement('a');
-                link.href = fileUrl(MODEL_DIR, 'file/' + encodeURIComponent(name));
-                link.textContent = name;
-                link.setAttribute('download', name);
+                link.href = fileUrl(MODEL_DIR, 'file/' + encodeURIComponent(item.name));
+                link.textContent = item.name;
+                link.setAttribute('download', item.name);
                 li.appendChild(link);
                 listEl.appendChild(li);
             });
@@ -784,7 +844,8 @@
                 fetch('./file/_index.json')
                     .then(function (res) { return res.ok ? res.json() : Promise.reject(res.status); })
                     .then(function (data) {
-                        renderList((data && data.files) || []);
+                        var items = normalizeAttachmentItems((data && (data.items || data.files)) || []);
+                        renderList(items);
                         setMsg('离线模式：已从本地清单加载附件');
                     })
                     .catch(function () {
@@ -795,7 +856,7 @@
             if (location.protocol === 'file:') {
                 var quickMetaList = getOfflineFileList('attachments');
                 if (quickMetaList !== null) {
-                    renderList(quickMetaList);
+                    renderList(normalizeAttachmentItems(quickMetaList));
                     setMsg('离线模式：已从页面元数据加载附件');
                     return;
                 }
@@ -807,7 +868,8 @@
             fetch(apiUrl('/api/models/' + encodeURIComponent(MODEL_DIR) + '/attachments'))
                 .then(function (res) { return res.ok ? res.json() : Promise.reject(res.status); })
                 .then(function (data) {
-                    renderList((data && data.files) || []);
+                    var items = normalizeAttachmentItems((data && (data.items || data.files)) || []);
+                    renderList(items);
                     setMsg('');
                 })
                 .catch(function () {
@@ -971,6 +1033,336 @@
             else if (success === 0) setMsg('上传失败', true);
             else setMsg('部分成功 ' + success + '/' + files.length, true);
             btnEl.disabled = false;
+        });
+    }
+
+    function initModelEditor() {
+        var openBtn = document.getElementById('modelEditOpenBtn');
+        var msgEl = document.getElementById('modelEditMsg');
+        var modal = document.getElementById('modelEditModal');
+        var closeBtn = document.getElementById('modelEditCloseBtn');
+        var cancelBtn = document.getElementById('modelEditCancelBtn');
+        var saveBtn = document.getElementById('modelEditSaveBtn');
+        var restoreBtn = document.getElementById('modelRestoreLatestBtn');
+        var titleInput = document.getElementById('modelEditTitleInput');
+        var categoryInput = document.getElementById('modelEditCategoryInput');
+        var tagsInput = document.getElementById('modelEditTagsInput');
+        var versionNoteInput = document.getElementById('modelEditVersionNoteInput');
+        var summaryInput = document.getElementById('modelEditSummaryInput');
+        var summaryEditor = document.getElementById('modelEditSummaryEditor');
+        var summaryToolbar = document.getElementById('modelEditToolbar');
+        var imageInput = document.getElementById('modelEditImageInput');
+        var galleryEl = document.getElementById('modelEditGallery');
+        var statusEl = document.getElementById('modelEditStatus');
+        var historyHintEl = document.getElementById('modelEditHistoryHint');
+        if (!openBtn || !modal || !closeBtn || !cancelBtn || !saveBtn) return;
+
+        var galleryState = [];
+
+        function setTopMsg(text, isError) {
+            if (!msgEl) return;
+            msgEl.textContent = text || '';
+            if (isError) msgEl.classList.add('error');
+            else msgEl.classList.remove('error');
+        }
+
+        function setStatus(text, isError) {
+            if (!statusEl) return;
+            statusEl.textContent = text || '';
+            if (isError) statusEl.classList.add('error');
+            else statusEl.classList.remove('error');
+        }
+
+        function syncSummaryValue() {
+            if (!summaryInput || !summaryEditor) return;
+            summaryInput.value = summaryEditor.innerHTML.trim();
+        }
+
+        function focusSummaryEditor() {
+            if (!summaryEditor) return;
+            summaryEditor.focus();
+        }
+
+        function execEditorCommand(cmd, value) {
+            if (!summaryEditor) return;
+            focusSummaryEditor();
+            try {
+                document.execCommand(cmd, false, value || null);
+            } catch (_) { }
+            syncSummaryValue();
+        }
+
+        function setBlockTag(tagName) {
+            if (!summaryEditor) return;
+            focusSummaryEditor();
+            try {
+                document.execCommand('formatBlock', false, tagName);
+            } catch (_) { }
+            syncSummaryValue();
+        }
+
+        function updateCoverRadios() {
+            var checked = galleryState.some(function (item) { return item.keep && item.cover; });
+            if (!checked) {
+                for (var i = 0; i < galleryState.length; i++) {
+                    if (galleryState[i].keep) {
+                        galleryState[i].cover = true;
+                        checked = true;
+                        break;
+                    }
+                }
+            }
+            if (!checked) {
+                for (var j = 0; j < galleryState.length; j++) galleryState[j].cover = false;
+            }
+        }
+
+        function renderGalleryEditor() {
+            if (!galleryEl) return;
+            updateCoverRadios();
+            galleryEl.innerHTML = '';
+            if (!galleryState.length) {
+                galleryEl.innerHTML = '<div class="attach-empty">当前没有设计图，上传后可设为封面</div>';
+                return;
+            }
+            galleryState.forEach(function (item, idx) {
+                var wrap = document.createElement('div');
+                wrap.className = 'model-edit-gallery-item';
+                var img = document.createElement('img');
+                img.alt = item.name || ('image-' + (idx + 1));
+                img.src = item.previewUrl || fileUrl(MODEL_DIR, 'images/' + item.name);
+                var meta = document.createElement('div');
+                meta.className = 'model-edit-gallery-meta';
+                meta.innerHTML =
+                    '<div class="model-edit-gallery-name">' + esc(item.name || ('图片 ' + (idx + 1))) + '</div>' +
+                    '<div class="model-edit-gallery-actions">' +
+                    '<label><input type="checkbox" data-role="keep" data-index="' + idx + '"' + (item.keep ? ' checked' : '') + '> 保留图片</label>' +
+                    '<label><input type="radio" name="model-edit-cover" data-role="cover" data-index="' + idx + '"' + (item.cover ? ' checked' : '') + (item.keep ? '' : ' disabled') + '> 设为封面</label>' +
+                    (item.isNew ? '<span>新上传</span>' : '<span>已有图片</span>') +
+                    '</div>';
+                wrap.appendChild(img);
+                wrap.appendChild(meta);
+                galleryEl.appendChild(wrap);
+            });
+            Array.from(galleryEl.querySelectorAll('input[data-role="keep"]')).forEach(function (el) {
+                el.addEventListener('change', function () {
+                    var idx = parseInt(this.getAttribute('data-index') || '-1', 10);
+                    if (idx < 0 || idx >= galleryState.length) return;
+                    galleryState[idx].keep = !!this.checked;
+                    if (!galleryState[idx].keep) galleryState[idx].cover = false;
+                    renderGalleryEditor();
+                });
+            });
+            Array.from(galleryEl.querySelectorAll('input[data-role="cover"]')).forEach(function (el) {
+                el.addEventListener('change', function () {
+                    var idx = parseInt(this.getAttribute('data-index') || '-1', 10);
+                    if (idx < 0 || idx >= galleryState.length) return;
+                    galleryState.forEach(function (item, itemIdx) {
+                        item.cover = itemIdx === idx && item.keep;
+                    });
+                    renderGalleryEditor();
+                });
+            });
+        }
+
+        function buildGalleryState() {
+            var images = normalizeImages(CURRENT_META || {});
+            var cover = images.cover || '';
+            galleryState = images.design.map(function (name, idx) {
+                return {
+                    id: 'existing-' + idx,
+                    name: name,
+                    keep: true,
+                    cover: name === cover,
+                    isNew: false,
+                    file: null,
+                    previewUrl: '',
+                };
+            });
+            updateCoverRadios();
+            renderGalleryEditor();
+        }
+
+        async function loadHistoryHint() {
+            if (!historyHintEl || !canUseBackendApi()) return;
+            historyHintEl.classList.add('hidden');
+            historyHintEl.textContent = '';
+            try {
+                var res = await fetch(apiUrl('/api/models/' + encodeURIComponent(MODEL_DIR) + '/history'));
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                var data = await res.json();
+                var items = Array.isArray(data && data.items) ? data.items : [];
+                if (!items.length) return;
+            historyHintEl.textContent = '最近备份：' + formatDateTime(items[0].updated_at || '');
+                historyHintEl.classList.remove('hidden');
+            } catch (_) { }
+        }
+
+        function fillFormFromMeta() {
+            var meta = CURRENT_META || {};
+            if (titleInput) titleInput.value = meta.title || '';
+            if (categoryInput) categoryInput.value = meta.category || meta.modelCategory || '';
+            if (tagsInput) tagsInput.value = Array.isArray(meta.tags) ? meta.tags.join('\n') : '';
+            if (versionNoteInput) versionNoteInput.value = meta.versionNote || meta.version_note || '';
+            if (summaryEditor) summaryEditor.innerHTML = summaryEditorValue(meta);
+            syncSummaryValue();
+            if (imageInput) imageInput.value = '';
+            setStatus('');
+            buildGalleryState();
+            loadHistoryHint();
+        }
+
+        function openModal() {
+            if (!canUseBackendApi()) {
+                setTopMsg('当前页面不支持在线编辑，请通过本地服务地址访问', true);
+                return;
+            }
+            fillFormFromMeta();
+            modal.classList.add('active');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal() {
+            modal.classList.remove('active');
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+
+        openBtn.addEventListener('click', openModal);
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) closeModal();
+        });
+
+        if (imageInput) {
+            imageInput.addEventListener('change', function () {
+                var files = imageInput.files ? Array.from(imageInput.files) : [];
+                files.forEach(function (file, idx) {
+                    galleryState.push({
+                        id: 'new-' + Date.now() + '-' + idx,
+                        name: file.name,
+                        keep: true,
+                        cover: false,
+                        isNew: true,
+                        file: file,
+                        previewUrl: URL.createObjectURL(file),
+                    });
+                });
+                renderGalleryEditor();
+            });
+        }
+
+        if (summaryEditor) {
+            ['input', 'blur', 'paste'].forEach(function (eventName) {
+                summaryEditor.addEventListener(eventName, function () {
+                    syncSummaryValue();
+                });
+            });
+        }
+
+        if (summaryToolbar) {
+            summaryToolbar.addEventListener('click', function (e) {
+                var btn = e.target.closest('button');
+                if (!btn) return;
+                var cmd = btn.getAttribute('data-cmd') || '';
+                var block = btn.getAttribute('data-block') || '';
+                if (cmd === 'createLink') {
+                    var url = window.prompt('请输入链接地址', 'https://');
+                    if (!url) return;
+                    execEditorCommand(cmd, url);
+                    return;
+                }
+                if (block) {
+                    setBlockTag(block);
+                    return;
+                }
+                if (cmd) execEditorCommand(cmd);
+            });
+        }
+
+        saveBtn.addEventListener('click', async function () {
+            if (!canUseBackendApi()) {
+                setStatus('当前页面不支持在线编辑', true);
+                return;
+            }
+            syncSummaryValue();
+            var title = titleInput ? String(titleInput.value || '').trim() : '';
+            if (!title) {
+                setStatus('标题不能为空', true);
+                return;
+            }
+            saveBtn.disabled = true;
+            restoreBtn.disabled = true;
+            setStatus('正在保存...');
+            try {
+                var keepNames = galleryState.filter(function (item) {
+                    return item.keep && !item.isNew;
+                }).map(function (item) { return item.name; });
+                var coverItem = galleryState.filter(function (item) { return item.keep && item.cover; })[0] || null;
+                var fd = new FormData();
+                fd.append('title', title);
+                fd.append('tags', tagsInput ? tagsInput.value || '' : '');
+                fd.append('category', categoryInput ? categoryInput.value || '' : '');
+                fd.append('version_note', versionNoteInput ? versionNoteInput.value || '' : '');
+                fd.append('summary_html', summaryInput ? summaryInput.value || '' : '');
+                fd.append('keep_design_images', JSON.stringify(keepNames));
+                fd.append('cover_name', coverItem ? coverItem.name : '');
+                galleryState.forEach(function (item) {
+                    if (item.keep && item.isNew && item.file) {
+                        fd.append('design_images', item.file, item.file.name);
+                    }
+                });
+                var res = await fetch(apiUrl('/api/models/' + encodeURIComponent(MODEL_DIR) + '/edit'), {
+                    method: 'POST',
+                    body: fd
+                });
+                if (!res.ok) {
+                    var txt = await res.text();
+                    throw new Error(txt || ('HTTP ' + res.status));
+                }
+                var data = await res.json();
+                setTopMsg((data && data.message) || '模型信息已保存');
+                closeModal();
+                location.reload();
+            } catch (e) {
+                setStatus('保存失败：' + (e.message || e), true);
+            } finally {
+                saveBtn.disabled = false;
+                restoreBtn.disabled = false;
+            }
+        });
+
+        restoreBtn.addEventListener('click', async function () {
+            if (!canUseBackendApi()) {
+                setStatus('当前页面不支持恢复', true);
+                return;
+            }
+            if (!window.confirm('将恢复最近一次备份，并覆盖当前 meta.json。是否继续？')) {
+                return;
+            }
+            saveBtn.disabled = true;
+            restoreBtn.disabled = true;
+            setStatus('正在恢复最近备份...');
+            try {
+                var res = await fetch(apiUrl('/api/models/' + encodeURIComponent(MODEL_DIR) + '/history/restore-latest'), {
+                    method: 'POST'
+                });
+                if (!res.ok) {
+                    var txt = await res.text();
+                    throw new Error(txt || ('HTTP ' + res.status));
+                }
+                var data = await res.json();
+                setTopMsg((data && data.message) || '已恢复最近备份');
+                closeModal();
+                location.reload();
+            } catch (e) {
+                setStatus('恢复失败：' + (e.message || e), true);
+            } finally {
+                saveBtn.disabled = false;
+                restoreBtn.disabled = false;
+            }
         });
     }
 
@@ -1234,6 +1626,7 @@
 
         try {
             var images = normalizeImages(meta);
+            CURRENT_META = meta;
 
             // 渲染各区域
             renderTitle(meta);
@@ -1241,7 +1634,8 @@
             renderAuthor(meta);
             renderSource(meta);
             renderHero(meta, images);
-            renderCollectDate(meta);
+        renderCollectDate(meta);
+            renderMetaExtras(meta);
             renderStats(meta);
             renderTags(meta);
             renderInstances(meta);
@@ -1256,6 +1650,7 @@
             initLightbox();
             initAttachments();
             initPrinted();
+            initModelEditor();
             initInstanceImport();
             initBambuOpenGuard();
 

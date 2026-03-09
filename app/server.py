@@ -177,6 +177,9 @@ if not logger.handlers:
     logger.addHandler(sh)
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+META_HISTORY_DIR_NAME = ".meta_history"
+DEFAULT_META_NOTE = "本文件包含结构化数据与打印配置详情。"
 
 def strip_html(value: str) -> str:
     if not value:
@@ -297,6 +300,158 @@ def save_model_meta(meta_path: Path, data: dict, rebuild_offline_page: bool = Tr
             index_path.write_text(build_index_html(data, {}), encoding="utf-8")
     except Exception as e:
         logger.warning("重建模型离线详情页失败: %s", e)
+
+
+def backup_model_meta(meta_path: Path) -> Optional[Path]:
+    if not meta_path.exists():
+        return None
+    history_dir = meta_path.parent / META_HISTORY_DIR_NAME
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = history_dir / f"meta_{stamp}.json"
+    shutil.copy2(meta_path, backup_path)
+    return backup_path
+
+
+def list_model_meta_backups(model_dir: Path) -> List[dict]:
+    history_dir = model_dir / META_HISTORY_DIR_NAME
+    if not history_dir.exists():
+        return []
+    backups = []
+    for path in sorted(history_dir.glob("meta_*.json"), reverse=True):
+        try:
+            stat = path.stat()
+        except Exception:
+            continue
+        backups.append({
+            "name": path.name,
+            "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "size": stat.st_size,
+        })
+    return backups
+
+
+def parse_json_list(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except Exception as exc:
+        raise HTTPException(400, f"列表参数格式无效: {exc}")
+    if not isinstance(data, list):
+        raise HTTPException(400, "列表参数必须是数组")
+    values = []
+    for item in data:
+        if isinstance(item, str):
+            val = item.strip()
+            if val:
+                values.append(val)
+    return values
+
+
+def split_tags_input(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if re.search(r"[,\n，；;]", text):
+        parts = re.split(r"[\n,，；;]+", text)
+    else:
+        parts = re.split(r"\s+", text)
+    tags = []
+    seen = set()
+    for item in parts:
+        val = str(item or "").strip()
+        if not val or val in seen:
+            continue
+        seen.add(val)
+        tags.append(val)
+    return tags
+
+
+def validate_text_field(name: str, value: str, *, required: bool = False, max_length: int = 0) -> str:
+    text = str(value or "").strip()
+    if required and not text:
+        raise HTTPException(400, f"{name}不能为空")
+    if _CONTROL_CHAR_RE.search(text):
+        raise HTTPException(400, f"{name}包含非法控制字符")
+    if max_length > 0 and len(text) > max_length:
+        raise HTTPException(400, f"{name}长度不能超过 {max_length}")
+    return text
+
+
+def build_design_image_records(files: List[str]) -> List[dict]:
+    return [
+        {
+            "index": idx,
+            "originalUrl": "",
+            "relPath": f"images/{fname}",
+            "fileName": fname,
+        }
+        for idx, fname in enumerate(files, start=1)
+    ]
+
+
+def normalize_existing_design_images(meta: dict) -> List[str]:
+    images = meta.get("images") if isinstance(meta.get("images"), dict) else {}
+    design = images.get("design")
+    if isinstance(design, list):
+        names = [Path(str(item)).name for item in design if str(item).strip()]
+        if names:
+            return names
+    records = meta.get("designImages")
+    if isinstance(records, list):
+        names = []
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            name = Path(str(item.get("fileName") or item.get("relPath") or "")).name
+            if name:
+                names.append(name)
+        if names:
+            return names
+    return []
+
+
+def update_editable_model_meta(
+    meta: dict,
+    *,
+    title: str,
+    tags: List[str],
+    category: str,
+    version_note: str,
+    summary_html: str,
+    design_images: List[str],
+    cover_name: str,
+) -> dict:
+    if not isinstance(meta, dict):
+        raise HTTPException(500, "meta.json 格式无效")
+
+    summary_payload = make_summary_payload(strip_html(summary_html), [], summary_html)
+    images = meta.get("images") if isinstance(meta.get("images"), dict) else {}
+    cover_payload = meta.get("cover") if isinstance(meta.get("cover"), dict) else {}
+
+    final_cover = cover_name or (design_images[0] if design_images else "")
+    images["design"] = design_images
+    images["cover"] = final_cover
+    meta["images"] = images
+    meta["designImages"] = build_design_image_records(design_images)
+    meta["title"] = title
+    meta["tags"] = tags
+    meta["tagsOriginal"] = list(tags)
+    meta["summary"] = summary_payload
+    meta["category"] = category
+    meta["versionNote"] = version_note
+    meta["update_time"] = datetime.now().isoformat()
+
+    cover_payload["url"] = str(cover_payload.get("url") or "")
+    cover_payload["localName"] = final_cover
+    cover_payload["relPath"] = f"images/{final_cover}" if final_cover else ""
+    meta["cover"] = cover_payload
+
+    if not meta.get("note"):
+        meta["note"] = DEFAULT_META_NOTE
+    return meta
 
 
 def normalize_model_download_error_type(error_type: str) -> str:
@@ -2892,6 +3047,140 @@ async def api_upload_printed(model_dir: str, file: UploadFile = File(...)):
     write_dir_index(printed_dir, files)
     sync_offline_files_to_meta(target, printed=files)
     return {"status": "ok", "file": dest.name}
+
+
+@app.get("/api/models/{model_dir}/history")
+async def api_model_history(model_dir: str):
+    target = resolve_model_dir(model_dir)
+    return {"items": list_model_meta_backups(target)}
+
+
+@app.post("/api/models/{model_dir}/edit")
+async def api_edit_model(
+    model_dir: str,
+    title: str = Form(""),
+    tags: str = Form(""),
+    category: str = Form(""),
+    version_note: str = Form(""),
+    summary_html: str = Form(""),
+    keep_design_images: str = Form("[]"),
+    cover_name: str = Form(""),
+    design_images: List[UploadFile] = File([]),
+):
+    target = resolve_model_dir(model_dir)
+    meta_path = target / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(404, "meta.json 不存在")
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(500, f"读取 meta.json 失败: {e}")
+    if not isinstance(meta, dict):
+        raise HTTPException(500, "meta.json 格式无效")
+
+    title_value = validate_text_field("标题", title, required=True, max_length=120)
+    category_value = validate_text_field("分类", category, max_length=40)
+    version_note_value = validate_text_field("版本备注", version_note, max_length=200)
+    summary_value = validate_text_field("说明", summary_html, max_length=50000)
+    tag_list = split_tags_input(tags)
+    if len(tag_list) > 30:
+        raise HTTPException(400, "标签数量不能超过 30")
+    for tag in tag_list:
+        validate_text_field("标签", tag, max_length=32)
+
+    existing_design = normalize_existing_design_images(meta)
+    keep_list_raw = parse_json_list(keep_design_images)
+    keep_list = []
+    keep_seen = set()
+    for item in keep_list_raw:
+        name = Path(item).name
+        if name in existing_design and name not in keep_seen:
+            keep_seen.add(name)
+            keep_list.append(name)
+
+    images_dir = target / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded_names: List[str] = []
+    for upload in design_images:
+        if not upload or not upload.filename:
+            continue
+        if not is_image_upload(upload):
+            raise HTTPException(400, f"仅支持图片文件: {upload.filename}")
+        safe_name = sanitize_filename(Path(upload.filename).name)
+        if not safe_name:
+            safe_name = f"design_{len(existing_design) + len(uploaded_names) + 1:02d}{pick_ext(upload.filename, '.jpg')}"
+        dest = ensure_unique_path(images_dir / safe_name)
+        save_upload_file(upload, dest)
+        uploaded_names.append(dest.name)
+
+    final_design_images = keep_list + uploaded_names
+    cover_value = Path(str(cover_name or "")).name
+    if cover_value and cover_value not in final_design_images:
+        raise HTTPException(400, "封面图片必须来自当前保留图片或新上传图片")
+
+    deleted_names = [name for name in existing_design if name not in keep_list]
+
+    backup_path = backup_model_meta(meta_path)
+    meta = update_editable_model_meta(
+        meta,
+        title=title_value,
+        tags=tag_list,
+        category=category_value,
+        version_note=version_note_value,
+        summary_html=summary_value,
+        design_images=final_design_images,
+        cover_name=cover_value,
+    )
+    save_model_meta(meta_path, meta)
+    sync_offline_files_to_meta(target)
+
+    for name in deleted_names:
+        try:
+            (images_dir / name).unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("删除旧设计图失败: %s (%s)", name, e)
+
+    return {
+        "status": "ok",
+        "message": "模型信息已保存",
+        "backup": backup_path.name if backup_path else "",
+        "design_image_count": len(final_design_images),
+    }
+
+
+@app.post("/api/models/{model_dir}/history/restore-latest")
+async def api_restore_model_latest_backup(model_dir: str):
+    target = resolve_model_dir(model_dir)
+    meta_path = target / "meta.json"
+    backups = list_model_meta_backups(target)
+    if not backups:
+        raise HTTPException(404, "没有可恢复的备份")
+
+    latest_name = backups[0]["name"]
+    if "/" in latest_name or "\\" in latest_name:
+        raise HTTPException(400, "备份文件名无效")
+    backup_path = target / META_HISTORY_DIR_NAME / latest_name
+    if not backup_path.exists():
+        raise HTTPException(404, "备份文件不存在")
+
+    try:
+        backup_data = json.loads(backup_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(500, f"读取备份失败: {e}")
+    if not isinstance(backup_data, dict):
+        raise HTTPException(500, "备份内容格式无效")
+
+    current_backup = backup_model_meta(meta_path)
+    save_model_meta(meta_path, backup_data)
+    sync_offline_files_to_meta(target)
+    return {
+        "status": "ok",
+        "message": "已恢复最近一次备份",
+        "restored_from": latest_name,
+        "backup_of_current": current_backup.name if current_backup else "",
+    }
 
 
 @app.post("/api/manual/3mf/parse")

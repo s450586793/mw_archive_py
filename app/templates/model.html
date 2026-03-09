@@ -92,6 +92,13 @@
                     <div class="author" id="authorSection"></div>
                     <div class="source-badge hidden" id="sourceBadge"></div>
                     <div class="collect-date" id="collectDate"></div>
+                    <div class="meta-extra hidden" id="metaExtraList"></div>
+                    <div class="info-actions">
+                        <button class="inst-admin-btn model-edit-open-btn" type="button" id="modelEditOpenBtn">
+                            <i class="fas fa-pen"></i> 编辑归档
+                        </button>
+                        <div class="info-toolbar__msg" id="modelEditMsg"></div>
+                    </div>
                     <div id="statsSection"></div>
                 </div>
 
@@ -187,6 +194,69 @@
         <button class="lb-nav lb-prev"><i class="fas fa-chevron-left"></i></button>
         <img src="" alt="preview">
         <button class="lb-nav lb-next"><i class="fas fa-chevron-right"></i></button>
+    </div>
+
+    <div class="model-edit-modal" id="modelEditModal" aria-hidden="true">
+        <div class="model-edit-modal__inner" role="dialog" aria-modal="true" aria-labelledby="modelEditTitle">
+            <div class="model-edit-modal__header">
+                <h3 id="modelEditTitle"><i class="fas fa-pen-to-square"></i> 在线编辑归档模型</h3>
+                <button class="model-edit-close" type="button" id="modelEditCloseBtn"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="model-edit-modal__body">
+                <div class="model-edit-grid">
+                    <div class="model-edit-field">
+                        <label for="modelEditTitleInput">标题</label>
+                        <input type="text" id="modelEditTitleInput" maxlength="120" placeholder="请输入模型标题">
+                    </div>
+                    <div class="model-edit-field">
+                        <label for="modelEditCategoryInput">分类</label>
+                        <input type="text" id="modelEditCategoryInput" maxlength="40" placeholder="例如：手办 / 收纳 / 装饰">
+                    </div>
+                </div>
+                <div class="model-edit-field">
+                    <label for="modelEditTagsInput">标签</label>
+                    <textarea id="modelEditTagsInput" rows="3" placeholder="支持逗号、空格或换行分隔"></textarea>
+                </div>
+                <div class="model-edit-field">
+                    <label for="modelEditVersionNoteInput">版本备注</label>
+                    <input type="text" id="modelEditVersionNoteInput" maxlength="200" placeholder="例如：V2 改良支撑与拼装结构">
+                </div>
+                <div class="model-edit-field">
+                    <label for="modelEditSummaryInput">说明</label>
+                    <div class="model-edit-richtext">
+                        <div class="model-edit-toolbar" id="modelEditToolbar">
+                            <button type="button" class="model-edit-tool" data-cmd="bold"><i class="fas fa-bold"></i></button>
+                            <button type="button" class="model-edit-tool" data-cmd="italic"><i class="fas fa-italic"></i></button>
+                            <button type="button" class="model-edit-tool" data-cmd="underline"><i class="fas fa-underline"></i></button>
+                            <button type="button" class="model-edit-tool" data-block="P">正文</button>
+                            <button type="button" class="model-edit-tool" data-block="H2">标题</button>
+                            <button type="button" class="model-edit-tool" data-block="H3">小标题</button>
+                            <button type="button" class="model-edit-tool" data-cmd="insertUnorderedList"><i class="fas fa-list-ul"></i></button>
+                            <button type="button" class="model-edit-tool" data-cmd="insertOrderedList"><i class="fas fa-list-ol"></i></button>
+                            <button type="button" class="model-edit-tool" data-cmd="createLink"><i class="fas fa-link"></i></button>
+                            <button type="button" class="model-edit-tool" data-cmd="removeFormat"><i class="fas fa-eraser"></i></button>
+                        </div>
+                        <div id="modelEditSummaryEditor" class="model-edit-editor" contenteditable="true" role="textbox" aria-multiline="true"></div>
+                    </div>
+                    <textarea id="modelEditSummaryInput" rows="10" placeholder="支持富文本编辑" class="hidden"></textarea>
+                </div>
+                <div class="model-edit-field">
+                    <label>设计图管理</label>
+                    <div class="model-edit-tip">可删除旧图、追加新图，并为任意保留图片设置封面。替换图片可通过“删除旧图 + 上传新图”完成。</div>
+                    <div class="model-edit-gallery" id="modelEditGallery"></div>
+                    <div class="model-edit-upload">
+                        <input type="file" id="modelEditImageInput" multiple accept="image/*">
+                    </div>
+                </div>
+                <div class="model-edit-history hidden" id="modelEditHistoryHint"></div>
+                <div class="model-edit-status" id="modelEditStatus"></div>
+            </div>
+            <div class="model-edit-modal__footer">
+                <button class="inst-admin-btn" type="button" id="modelRestoreLatestBtn">恢复最近备份</button>
+                <button class="inst-admin-btn" type="button" id="modelEditCancelBtn">取消</button>
+                <button class="inst-admin-btn primary" type="button" id="modelEditSaveBtn"><i class="fas fa-save"></i> 保存修改</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/js/theme.js?v=5.1.2"></script>
