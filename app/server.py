@@ -112,6 +112,12 @@ COOKIE_STATUS_COOLDOWN = "cooldown"
 COOKIE_STATUS_INVALID = "invalid"
 COOKIE_PLATFORM_SET = {"cn", "global"}
 COOKIE_COOLDOWN_SECONDS = 30 * 60
+MODEL_DOWNLOAD_STATUS_OK = "ok"
+MODEL_DOWNLOAD_STATUS_FAILED = "failed"
+MODEL_DOWNLOAD_ERROR_COOKIE_INVALID = "cookie_invalid"
+MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE = "cookie_challenge"
+MODEL_DOWNLOAD_ERROR_RATE_LIMIT = "rate_limit"
+MODEL_DOWNLOAD_ERROR_UNKNOWN = "unknown"
 
 
 def load_version_values() -> dict:
@@ -279,6 +285,83 @@ def ensure_collect_date(data: dict, fallback_ts: int) -> dict:
     else:
         data["collectDate"] = ts_int
     return data
+
+
+def save_model_meta(meta_path: Path, data: dict, rebuild_offline_page: bool = True):
+    meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not rebuild_offline_page:
+        return
+    try:
+        index_path = meta_path.parent / "index.html"
+        if index_path.exists():
+            index_path.write_text(build_index_html(data, {}), encoding="utf-8")
+    except Exception as e:
+        logger.warning("重建模型离线详情页失败: %s", e)
+
+
+def normalize_model_download_error_type(error_type: str) -> str:
+    value = str(error_type or "").strip().lower()
+    if value in {
+        MODEL_DOWNLOAD_ERROR_COOKIE_INVALID,
+        MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE,
+        MODEL_DOWNLOAD_ERROR_RATE_LIMIT,
+    }:
+        return value
+    return MODEL_DOWNLOAD_ERROR_UNKNOWN
+
+
+def classify_model_download_error_type(err: Optional[Exception]) -> str:
+    text = str(err or "").strip()
+    if "cf_clearance" in text or "cloudflare" in text.lower():
+        return MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE
+    status = classify_cookie_error(err) if err else None
+    if status == COOKIE_STATUS_INVALID:
+        return MODEL_DOWNLOAD_ERROR_COOKIE_INVALID
+    if status == COOKIE_STATUS_COOLDOWN:
+        return MODEL_DOWNLOAD_ERROR_RATE_LIMIT
+    return MODEL_DOWNLOAD_ERROR_UNKNOWN
+
+
+def mark_model_download_failed(
+    meta: dict,
+    error_type: str,
+    error_message: str = "",
+    failed_at: Optional[str] = None,
+) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    normalized_type = normalize_model_download_error_type(error_type)
+    normalized_message = str(error_message or "").strip()
+    normalized_time = str(failed_at or datetime.now().isoformat()).strip()
+    changed = False
+
+    if meta.get("download_status") != MODEL_DOWNLOAD_STATUS_FAILED:
+        meta["download_status"] = MODEL_DOWNLOAD_STATUS_FAILED
+        changed = True
+    if meta.get("download_error_type") != normalized_type:
+        meta["download_error_type"] = normalized_type
+        changed = True
+    if meta.get("download_error_message") != normalized_message:
+        meta["download_error_message"] = normalized_message
+        changed = True
+    if meta.get("download_error_at") != normalized_time:
+        meta["download_error_at"] = normalized_time
+        changed = True
+    return changed
+
+
+def clear_model_download_failed(meta: dict) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    changed = False
+    if meta.get("download_status") != MODEL_DOWNLOAD_STATUS_OK:
+        meta["download_status"] = MODEL_DOWNLOAD_STATUS_OK
+        changed = True
+    for key in ("download_error_type", "download_error_message", "download_error_at"):
+        if key in meta:
+            meta.pop(key, None)
+            changed = True
+    return changed
 
 
 def sync_offline_files_to_meta(model_dir: Path, attachments: Optional[List[str]] = None, printed: Optional[List[str]] = None):
@@ -1778,8 +1861,10 @@ def retry_missing_downloads(cfg):
         if name3mf:
             target["name"] = name3mf
         target["fileName"] = file_name
+        if clear_model_download_failed(meta):
+            logger.info("清除模型下载失败标记: %s", base_name)
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"写入 meta.json 失败: {e}"})
             remaining_lines.append(line)
@@ -1837,6 +1922,11 @@ def redownload_instance_by_id(cfg, inst_id: int):
                 cfg, api_url, f"实例重下 {inst_id}", _runner, notify_cookie_issue=True
             )
         except Exception as e:
+            if mark_model_download_failed(meta, classify_model_download_error_type(e), str(e)):
+                try:
+                    save_model_meta(meta_path, meta)
+                except Exception as save_err:
+                    logger.warning("写入实例重下失败标记失败: %s", save_err)
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
             continue
 
@@ -1860,6 +1950,11 @@ def redownload_instance_by_id(cfg, inst_id: int):
             session.cookies.update(parse_cookies(selected_cookie))
             download_file(session, dl_url, dest)
         except Exception as e:
+            if mark_model_download_failed(meta, classify_model_download_error_type(e), str(e)):
+                try:
+                    save_model_meta(meta_path, meta)
+                except Exception as save_err:
+                    logger.warning("写入实例下载失败标记失败: %s", save_err)
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
             continue
 
@@ -1869,8 +1964,9 @@ def redownload_instance_by_id(cfg, inst_id: int):
         if name3mf:
             target["name"] = name3mf
         target["fileName"] = file_name
+        clear_model_download_failed(meta)
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"写入 meta.json 失败: {e}"})
             continue
@@ -1943,6 +2039,7 @@ def redownload_model_by_id(cfg, model_id: int):
                     cfg, api_url, f"模型重下 {model_id}/{inst_id}", _runner, notify_cookie_issue=True
                 )
             except Exception as e:
+                mark_model_download_failed(meta, classify_model_download_error_type(e), str(e))
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
                 continue
 
@@ -1963,6 +2060,7 @@ def redownload_model_by_id(cfg, model_id: int):
                 session.cookies.update(parse_cookies(selected_cookie))
                 download_file(session, dl_url, dest)
             except Exception as e:
+                mark_model_download_failed(meta, classify_model_download_error_type(e), str(e))
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
                 continue
 
@@ -1972,6 +2070,7 @@ def redownload_model_by_id(cfg, model_id: int):
             if name3mf:
                 inst["name"] = name3mf
             inst["fileName"] = file_name
+            clear_model_download_failed(meta)
             success += 1
             details.append({"status": "ok", "base_name": meta.get("baseName"), "inst_id": inst_id, "file": dest.name, "downloadUrl": dl_url})
 
@@ -1983,7 +2082,7 @@ def redownload_model_by_id(cfg, model_id: int):
                 ]
 
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "message": f"写入 meta.json 失败: {e}"})
 
@@ -2157,6 +2256,21 @@ def archive_model_with_lock(url: str) -> dict:
             result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
             result["notify_payload"] = build_archive_notify_payload(result, final_dir)
             result["cookie_context"] = {"platform": platform, "index": cookie_index}
+            meta_path = final_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    if result.get("missing_3mf"):
+                        mark_model_download_failed(
+                            meta,
+                            MODEL_DOWNLOAD_ERROR_COOKIE_INVALID,
+                            "模型 3MF 下载失败，需更新 Cookie 后重试",
+                        )
+                    else:
+                        clear_model_download_failed(meta)
+                    save_model_meta(meta_path, meta)
+                except Exception as e:
+                    logger.warning("归档后写入模型下载状态失败: %s", e)
             return result
 
         return run_with_cookie_failover(CFG, model_url, "模型归档", _runner)

@@ -286,6 +286,19 @@
         document.title = meta.title || '模型详情';
     }
 
+    function renderDownloadWarning(meta) {
+        var el = document.getElementById('downloadWarning');
+        if (!el) return;
+        var status = String((meta && meta.download_status) || '').trim().toLowerCase();
+        if (status !== 'failed') {
+            el.classList.add('hidden');
+            el.innerHTML = '';
+            return;
+        }
+        el.innerHTML = '<i class="fas fa-triangle-exclamation"></i><span>该模型下载失败，当前文件不完整</span>';
+        el.classList.remove('hidden');
+    }
+
     function renderAuthor(meta) {
         var author = normalizeAuthor(meta);
         var el = document.getElementById('authorSection');
@@ -1224,6 +1237,7 @@
 
             // 渲染各区域
             renderTitle(meta);
+            renderDownloadWarning(meta);
             renderAuthor(meta);
             renderSource(meta);
             renderHero(meta, images);
