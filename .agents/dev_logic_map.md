@@ -116,6 +116,31 @@
   - 适配主页（模型库）、配置页、在线详情页（`/v2/files/...`）
   - 在线详情页始终跟随主页主题（无单独开关）
 
+### 2.8 模型下载失败标记
+- 后端持久化：
+  - 文件：`app/server.py`
+  - 元数据字段：
+    - `download_status`: `ok / failed`
+    - `download_error_type`: `cookie_invalid / cookie_challenge / rate_limit / unknown`
+    - `download_error_message`
+    - `download_error_at`
+  - 关键函数：
+    - `mark_model_download_failed()`
+    - `clear_model_download_failed()`
+    - `save_model_meta()`
+- 写入时机：
+  - 模型归档后若存在 `missing_3mf`，写入失败标记
+  - 实例重下 / 模型重下 / 缺失 3MF 重试出现 Cookie 相关失败时，写入失败标记
+  - 任一重下载成功后清除失败标记
+- 页面展示：
+  - 模板：`app/templates/model.html`
+  - 样式：`app/static/css/model.css`
+  - 脚本：`app/static/js/model.js -> renderDownloadWarning()`
+  - 规则：详情页检测 `download_status === "failed"` 时，在标题下方显示明显警示条
+- 离线页同步：
+  - `save_model_meta()` 写 `meta.json` 后会尝试同步重建同目录 `index.html`
+  - 这样 `/v2/files/...` 与归档离线页都能看到相同失败标记
+
 ## 3. 高频改动定位（按需求找入口）
 
 ### 3.1 “下载地址错了 / 404 / 文件名不对”
@@ -144,6 +169,13 @@
 2. `app/static/css/variables.css`（主题变量）
 3. `app/static/css/gallery.css`、`app/static/css/config.css`、`app/static/css/model.css`（页面级适配）
 4. `app/templates/gallery.html`、`app/templates/config.html`、`app/templates/model.html`（按钮位置与脚本引入）
+
+### 3.6 “详情页需要提示下载失败 / Cookie 失效”
+优先看：
+1. `app/server.py -> mark_model_download_failed(), clear_model_download_failed(), save_model_meta()`
+2. `app/server.py -> archive_model_with_lock(), retry_missing_downloads(), redownload_instance_by_id(), redownload_model_by_id()`
+3. `app/static/js/model.js -> renderDownloadWarning()`
+4. `app/templates/model.html`、`app/static/css/model.css`
 
 ## 4. 快速排障流程（建议顺序）
 

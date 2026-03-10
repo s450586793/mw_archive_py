@@ -46,6 +46,7 @@ class TelegramPushService:
         on_search: Callable[[str], str],
         on_get_base_url: Callable[[], str],
         on_set_base_url: Callable[[str], str],
+        on_redownload_missing: Callable[[], str],
     ):
         self._cfg_getter = cfg_getter
         self._logger = logger
@@ -55,6 +56,7 @@ class TelegramPushService:
         self._on_search = on_search
         self._on_get_base_url = on_get_base_url
         self._on_set_base_url = on_set_base_url
+        self._on_redownload_missing = on_redownload_missing
         self._offset = 0
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -251,6 +253,11 @@ class TelegramPushService:
             msg = self._on_set_base_url(raw)
             self._send_message(token, chat_id, msg)
             return
+        if text.startswith("/redl"):
+            self._send_message(token, chat_id, "♻️ 开始重下缺失 3MF，请稍候...")
+            msg = self._on_redownload_missing()
+            self._send_message(token, chat_id, msg)
+            return
 
         model_url = extract_makerworld_model_url(text)
         if not model_url:
@@ -320,6 +327,7 @@ class TelegramPushService:
                 {"command": "search", "description": "按关键词搜索本地模型"},
                 {"command": "url", "description": "查看在线地址前缀"},
                 {"command": "seturl", "description": "设置在线地址前缀"},
+                {"command": "redl", "description": "重下缺失 3MF"},
             ]
         }
         try:
@@ -337,7 +345,8 @@ class TelegramPushService:
             "• /count：查看本地已归档模型总数\n"
             "• /search 关键词：搜索库中模型标题并返回在线地址\n"
             "• /url：查看当前在线地址前缀\n"
-            "• /seturl 地址：设置在线地址前缀\n\n"
+            "• /seturl 地址：设置在线地址前缀\n"
+            "• /redl：重新下载缺失的 3MF 文件\n\n"
             "📎 也可以直接发送 MakerWorld 模型链接，机器人会自动触发归档。"
         )
 
@@ -350,6 +359,7 @@ class TelegramPushService:
             "• /search 关键词：按关键词搜索本地模型\n"
             "• /url：查看在线地址前缀\n"
             "• /seturl 地址：设置在线地址前缀\n"
+            "• /redl：重新下载缺失的 3MF 文件\n"
             "• /help：查看完整命令说明"
         )
 

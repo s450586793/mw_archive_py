@@ -75,3 +75,4 @@ npm-debug.log
 # Environment files
 .env
 .env.local
+.codex/environments/environment.toml

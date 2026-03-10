@@ -96,6 +96,7 @@ ARCHIVE_LOCK = threading.Lock()
 DEFAULT_GALLERY_FLAGS = {
     "favorites": [],
     "printed": [],
+    "folders": [],
 }
 DEFAULT_COOKIE_STORE = {
     "cn": [],
@@ -112,6 +113,12 @@ COOKIE_STATUS_COOLDOWN = "cooldown"
 COOKIE_STATUS_INVALID = "invalid"
 COOKIE_PLATFORM_SET = {"cn", "global"}
 COOKIE_COOLDOWN_SECONDS = 30 * 60
+MODEL_DOWNLOAD_STATUS_OK = "ok"
+MODEL_DOWNLOAD_STATUS_FAILED = "failed"
+MODEL_DOWNLOAD_ERROR_COOKIE_INVALID = "cookie_invalid"
+MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE = "cookie_challenge"
+MODEL_DOWNLOAD_ERROR_RATE_LIMIT = "rate_limit"
+MODEL_DOWNLOAD_ERROR_UNKNOWN = "unknown"
 
 
 def load_version_values() -> dict:
@@ -171,6 +178,9 @@ if not logger.handlers:
     logger.addHandler(sh)
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+META_HISTORY_DIR_NAME = ".meta_history"
+DEFAULT_META_NOTE = "本文件包含结构化数据与打印配置详情。"
 
 def strip_html(value: str) -> str:
     if not value:
@@ -279,6 +289,235 @@ def ensure_collect_date(data: dict, fallback_ts: int) -> dict:
     else:
         data["collectDate"] = ts_int
     return data
+
+
+def save_model_meta(meta_path: Path, data: dict, rebuild_offline_page: bool = True):
+    meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not rebuild_offline_page:
+        return
+    try:
+        index_path = meta_path.parent / "index.html"
+        if index_path.exists():
+            index_path.write_text(build_index_html(data, {}), encoding="utf-8")
+    except Exception as e:
+        logger.warning("重建模型离线详情页失败: %s", e)
+
+
+def backup_model_meta(meta_path: Path) -> Optional[Path]:
+    if not meta_path.exists():
+        return None
+    history_dir = meta_path.parent / META_HISTORY_DIR_NAME
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = history_dir / f"meta_{stamp}.json"
+    shutil.copy2(meta_path, backup_path)
+    return backup_path
+
+
+def list_model_meta_backups(model_dir: Path) -> List[dict]:
+    history_dir = model_dir / META_HISTORY_DIR_NAME
+    if not history_dir.exists():
+        return []
+    backups = []
+    for path in sorted(history_dir.glob("meta_*.json"), reverse=True):
+        try:
+            stat = path.stat()
+        except Exception:
+            continue
+        backups.append({
+            "name": path.name,
+            "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "size": stat.st_size,
+        })
+    return backups
+
+
+def parse_json_list(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except Exception as exc:
+        raise HTTPException(400, f"列表参数格式无效: {exc}")
+    if not isinstance(data, list):
+        raise HTTPException(400, "列表参数必须是数组")
+    values = []
+    for item in data:
+        if isinstance(item, str):
+            val = item.strip()
+            if val:
+                values.append(val)
+    return values
+
+
+def split_tags_input(raw: str) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if re.search(r"[,\n，；;]", text):
+        parts = re.split(r"[\n,，；;]+", text)
+    else:
+        parts = re.split(r"\s+", text)
+    tags = []
+    seen = set()
+    for item in parts:
+        val = str(item or "").strip()
+        if not val or val in seen:
+            continue
+        seen.add(val)
+        tags.append(val)
+    return tags
+
+
+def validate_text_field(name: str, value: str, *, required: bool = False, max_length: int = 0) -> str:
+    text = str(value or "").strip()
+    if required and not text:
+        raise HTTPException(400, f"{name}不能为空")
+    if _CONTROL_CHAR_RE.search(text):
+        raise HTTPException(400, f"{name}包含非法控制字符")
+    if max_length > 0 and len(text) > max_length:
+        raise HTTPException(400, f"{name}长度不能超过 {max_length}")
+    return text
+
+
+def build_design_image_records(files: List[str]) -> List[dict]:
+    return [
+        {
+            "index": idx,
+            "originalUrl": "",
+            "relPath": f"images/{fname}",
+            "fileName": fname,
+        }
+        for idx, fname in enumerate(files, start=1)
+    ]
+
+
+def normalize_existing_design_images(meta: dict) -> List[str]:
+    images = meta.get("images") if isinstance(meta.get("images"), dict) else {}
+    design = images.get("design")
+    if isinstance(design, list):
+        names = [Path(str(item)).name for item in design if str(item).strip()]
+        if names:
+            return names
+    records = meta.get("designImages")
+    if isinstance(records, list):
+        names = []
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            name = Path(str(item.get("fileName") or item.get("relPath") or "")).name
+            if name:
+                names.append(name)
+        if names:
+            return names
+    return []
+
+
+def update_editable_model_meta(
+    meta: dict,
+    *,
+    title: str,
+    tags: List[str],
+    category: str,
+    version_note: str,
+    summary_html: str,
+    design_images: List[str],
+    cover_name: str,
+) -> dict:
+    if not isinstance(meta, dict):
+        raise HTTPException(500, "meta.json 格式无效")
+
+    summary_payload = make_summary_payload(strip_html(summary_html), [], summary_html)
+    images = meta.get("images") if isinstance(meta.get("images"), dict) else {}
+    cover_payload = meta.get("cover") if isinstance(meta.get("cover"), dict) else {}
+
+    final_cover = cover_name or (design_images[0] if design_images else "")
+    images["design"] = design_images
+    images["cover"] = final_cover
+    meta["images"] = images
+    meta["designImages"] = build_design_image_records(design_images)
+    meta["title"] = title
+    meta["tags"] = tags
+    meta["tagsOriginal"] = list(tags)
+    meta["summary"] = summary_payload
+    meta["category"] = category
+    meta["versionNote"] = version_note
+    meta["update_time"] = datetime.now().isoformat()
+
+    cover_payload["url"] = str(cover_payload.get("url") or "")
+    cover_payload["localName"] = final_cover
+    cover_payload["relPath"] = f"images/{final_cover}" if final_cover else ""
+    meta["cover"] = cover_payload
+
+    if not meta.get("note"):
+        meta["note"] = DEFAULT_META_NOTE
+    return meta
+
+
+def normalize_model_download_error_type(error_type: str) -> str:
+    value = str(error_type or "").strip().lower()
+    if value in {
+        MODEL_DOWNLOAD_ERROR_COOKIE_INVALID,
+        MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE,
+        MODEL_DOWNLOAD_ERROR_RATE_LIMIT,
+    }:
+        return value
+    return MODEL_DOWNLOAD_ERROR_UNKNOWN
+
+
+def classify_model_download_error_type(err: Optional[Exception]) -> str:
+    text = str(err or "").strip()
+    if "cf_clearance" in text or "cloudflare" in text.lower():
+        return MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE
+    status = classify_cookie_error(err) if err else None
+    if status == COOKIE_STATUS_INVALID:
+        return MODEL_DOWNLOAD_ERROR_COOKIE_INVALID
+    if status == COOKIE_STATUS_COOLDOWN:
+        return MODEL_DOWNLOAD_ERROR_RATE_LIMIT
+    return MODEL_DOWNLOAD_ERROR_UNKNOWN
+
+
+def mark_model_download_failed(
+    meta: dict,
+    error_type: str,
+    error_message: str = "",
+    failed_at: Optional[str] = None,
+) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    normalized_type = normalize_model_download_error_type(error_type)
+    normalized_message = str(error_message or "").strip()
+    normalized_time = str(failed_at or datetime.now().isoformat()).strip()
+    changed = False
+
+    if meta.get("download_status") != MODEL_DOWNLOAD_STATUS_FAILED:
+        meta["download_status"] = MODEL_DOWNLOAD_STATUS_FAILED
+        changed = True
+    if meta.get("download_error_type") != normalized_type:
+        meta["download_error_type"] = normalized_type
+        changed = True
+    if meta.get("download_error_message") != normalized_message:
+        meta["download_error_message"] = normalized_message
+        changed = True
+    if meta.get("download_error_at") != normalized_time:
+        meta["download_error_at"] = normalized_time
+        changed = True
+    return changed
+
+
+def clear_model_download_failed(meta: dict) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    changed = False
+    if meta.get("download_status") != MODEL_DOWNLOAD_STATUS_OK:
+        meta["download_status"] = MODEL_DOWNLOAD_STATUS_OK
+        changed = True
+    for key in ("download_error_type", "download_error_message", "download_error_at"):
+        if key in meta:
+            meta.pop(key, None)
+            changed = True
+    return changed
 
 
 def sync_offline_files_to_meta(model_dir: Path, attachments: Optional[List[str]] = None, printed: Optional[List[str]] = None):
@@ -1351,6 +1590,68 @@ def save_raw_config(raw_cfg: dict):
     CONFIG_PATH.write_text(json.dumps(raw_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def normalize_gallery_folder(folder: dict) -> Optional[dict]:
+    if not isinstance(folder, dict):
+        return None
+    name = str(folder.get("name") or "").strip()
+    if not name:
+        return None
+    folder_id = str(folder.get("id") or "").strip() or uuid.uuid4().hex
+    description = str(folder.get("description") or "").strip()
+    raw_dirs = folder.get("modelDirs")
+    model_dirs = []
+    if isinstance(raw_dirs, list):
+        for item in raw_dirs:
+            value = str(item or "").strip()
+            if value and value not in model_dirs:
+                model_dirs.append(value)
+    created_at = str(folder.get("createdAt") or "").strip() or now_iso()
+    updated_at = str(folder.get("updatedAt") or "").strip() or now_iso()
+    return {
+        "id": folder_id,
+        "name": name,
+        "description": description,
+        "modelDirs": model_dirs,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    }
+
+
+def normalize_gallery_flags_data(data: dict) -> dict:
+    payload = data if isinstance(data, dict) else {}
+    favorites = []
+    for item in payload.get("favorites") or []:
+        value = str(item or "").strip()
+        if value and value not in favorites:
+            favorites.append(value)
+    printed = []
+    for item in payload.get("printed") or []:
+        value = str(item or "").strip()
+        if value and value not in printed:
+            printed.append(value)
+    folders = []
+    seen_folder_ids = set()
+    seen_folder_names = set()
+    raw_folders = payload.get("folders") if isinstance(payload.get("folders"), list) else []
+    for folder in raw_folders:
+        normalized = normalize_gallery_folder(folder)
+        if not normalized:
+            continue
+        if normalized["id"] in seen_folder_ids:
+            continue
+        lowered_name = normalized["name"].lower()
+        if lowered_name in seen_folder_names:
+            continue
+        seen_folder_ids.add(normalized["id"])
+        seen_folder_names.add(lowered_name)
+        folders.append(normalized)
+    return {
+        "favorites": favorites,
+        "printed": printed,
+        "folders": folders,
+    }
+
+
 def load_gallery_flags() -> dict:
     ensure_config_dir()
     changed = False
@@ -1369,9 +1670,7 @@ def load_gallery_flags() -> dict:
     else:
         data = deepcopy(DEFAULT_GALLERY_FLAGS)
         changed = True
-    favorites = data.get("favorites") if isinstance(data.get("favorites"), list) else []
-    printed = data.get("printed") if isinstance(data.get("printed"), list) else []
-    normalized = {"favorites": favorites, "printed": printed}
+    normalized = normalize_gallery_flags_data(data)
     if changed or normalized != data:
         GALLERY_FLAGS_PATH.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     return normalized
@@ -1379,11 +1678,25 @@ def load_gallery_flags() -> dict:
 
 def save_gallery_flags(flags: dict):
     ensure_config_dir()
-    data = {
-        "favorites": list(dict.fromkeys(flags.get("favorites") or [])),
-        "printed": list(dict.fromkeys(flags.get("printed") or [])),
-    }
+    data = normalize_gallery_flags_data(flags)
     GALLERY_FLAGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def remove_model_dirs_from_gallery_flags(flags: dict, model_dirs: List[str]) -> dict:
+    targets = {str(item or "").strip() for item in (model_dirs or []) if str(item or "").strip()}
+    if not targets:
+        return normalize_gallery_flags_data(flags)
+    data = normalize_gallery_flags_data(flags)
+    data["favorites"] = [x for x in data.get("favorites", []) if x not in targets]
+    data["printed"] = [x for x in data.get("printed", []) if x not in targets]
+    folders = []
+    for folder in data.get("folders", []):
+        next_folder = dict(folder)
+        next_folder["modelDirs"] = [x for x in folder.get("modelDirs", []) if x not in targets]
+        next_folder["updatedAt"] = now_iso()
+        folders.append(next_folder)
+    data["folders"] = folders
+    return data
 
 
 def read_cookie(cfg, platform: str = "cn") -> str:
@@ -1537,6 +1850,26 @@ def tg_set_base_url(raw_url: str) -> str:
     save_raw_config(raw_cfg)
     CFG.update(build_runtime_config(raw_cfg))
     return f"✅ 在线地址前缀已更新为：\n{value}"
+
+
+def tg_redownload_missing_3mf_text() -> str:
+    try:
+        result = retry_missing_downloads(CFG)
+    except Exception as e:
+        logger.exception("Telegram 触发缺失 3MF 重下失败")
+        return f"❌ 缺失 3MF 重下失败：{e}"
+
+    processed = int(result.get("processed") or 0)
+    success = int(result.get("success") or 0)
+    failed = int(result.get("failed") or 0)
+    if processed <= 0:
+        return "📭 缺失 3MF 列表为空，无需重下。"
+    return (
+        "✅ 缺失 3MF 重下完成\n"
+        f"总数：{processed}\n"
+        f"成功：{success}\n"
+        f"失败：{failed}"
+    )
 
 
 def classify_archive_exception(err: Exception) -> tuple[str, str]:
@@ -1778,8 +2111,10 @@ def retry_missing_downloads(cfg):
         if name3mf:
             target["name"] = name3mf
         target["fileName"] = file_name
+        if clear_model_download_failed(meta):
+            logger.info("清除模型下载失败标记: %s", base_name)
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": base_name, "inst_id": inst_id_str, "message": f"写入 meta.json 失败: {e}"})
             remaining_lines.append(line)
@@ -1837,6 +2172,11 @@ def redownload_instance_by_id(cfg, inst_id: int):
                 cfg, api_url, f"实例重下 {inst_id}", _runner, notify_cookie_issue=True
             )
         except Exception as e:
+            if mark_model_download_failed(meta, classify_model_download_error_type(e), str(e)):
+                try:
+                    save_model_meta(meta_path, meta)
+                except Exception as save_err:
+                    logger.warning("写入实例重下失败标记失败: %s", save_err)
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
             continue
 
@@ -1860,6 +2200,11 @@ def redownload_instance_by_id(cfg, inst_id: int):
             session.cookies.update(parse_cookies(selected_cookie))
             download_file(session, dl_url, dest)
         except Exception as e:
+            if mark_model_download_failed(meta, classify_model_download_error_type(e), str(e)):
+                try:
+                    save_model_meta(meta_path, meta)
+                except Exception as save_err:
+                    logger.warning("写入实例下载失败标记失败: %s", save_err)
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
             continue
 
@@ -1869,8 +2214,9 @@ def redownload_instance_by_id(cfg, inst_id: int):
         if name3mf:
             target["name"] = name3mf
         target["fileName"] = file_name
+        clear_model_download_failed(meta)
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"写入 meta.json 失败: {e}"})
             continue
@@ -1943,6 +2289,7 @@ def redownload_model_by_id(cfg, model_id: int):
                     cfg, api_url, f"模型重下 {model_id}/{inst_id}", _runner, notify_cookie_issue=True
                 )
             except Exception as e:
+                mark_model_download_failed(meta, classify_model_download_error_type(e), str(e))
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"接口失败: {e}"})
                 continue
 
@@ -1963,6 +2310,7 @@ def redownload_model_by_id(cfg, model_id: int):
                 session.cookies.update(parse_cookies(selected_cookie))
                 download_file(session, dl_url, dest)
             except Exception as e:
+                mark_model_download_failed(meta, classify_model_download_error_type(e), str(e))
                 details.append({"status": "fail", "base_name": meta.get("baseName"), "inst_id": inst_id, "message": f"下载失败: {e}"})
                 continue
 
@@ -1972,6 +2320,7 @@ def redownload_model_by_id(cfg, model_id: int):
             if name3mf:
                 inst["name"] = name3mf
             inst["fileName"] = file_name
+            clear_model_download_failed(meta)
             success += 1
             details.append({"status": "ok", "base_name": meta.get("baseName"), "inst_id": inst_id, "file": dest.name, "downloadUrl": dl_url})
 
@@ -1983,7 +2332,7 @@ def redownload_model_by_id(cfg, model_id: int):
                 ]
 
         try:
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_model_meta(meta_path, meta)
         except Exception as e:
             details.append({"status": "fail", "base_name": meta.get("baseName"), "message": f"写入 meta.json 失败: {e}"})
 
@@ -2082,6 +2431,7 @@ TG_SERVICE = TelegramPushService(
     on_search=tg_search_models_text,
     on_get_base_url=tg_get_base_url_text,
     on_set_base_url=tg_set_base_url,
+    on_redownload_missing=tg_redownload_missing_3mf_text,
 )
 NOTIFIER = NotificationDispatcher(logger)
 NOTIFIER.register("telegram", TG_SERVICE)
@@ -2157,6 +2507,21 @@ def archive_model_with_lock(url: str) -> dict:
             result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
             result["notify_payload"] = build_archive_notify_payload(result, final_dir)
             result["cookie_context"] = {"platform": platform, "index": cookie_index}
+            meta_path = final_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    if result.get("missing_3mf"):
+                        mark_model_download_failed(
+                            meta,
+                            MODEL_DOWNLOAD_ERROR_COOKIE_INVALID,
+                            "模型 3MF 下载失败，需更新 Cookie 后重试",
+                        )
+                    else:
+                        clear_model_download_failed(meta)
+                    save_model_meta(meta_path, meta)
+                except Exception as e:
+                    logger.warning("归档后写入模型下载状态失败: %s", e)
             return result
 
         return run_with_cookie_failover(CFG, model_url, "模型归档", _runner)
@@ -2684,11 +3049,8 @@ async def api_gallery_flags():
 
 @app.post("/api/gallery/flags")
 async def api_save_gallery_flags(body: dict):
-    favorites = body.get("favorites") if isinstance(body, dict) else []
-    printed = body.get("printed") if isinstance(body, dict) else []
-    favorites_list = [str(x) for x in favorites] if isinstance(favorites, list) else []
-    printed_list = [str(x) for x in printed] if isinstance(printed, list) else []
-    save_gallery_flags({"favorites": favorites_list, "printed": printed_list})
+    payload = body if isinstance(body, dict) else {}
+    save_gallery_flags(payload)
     return {"status": "ok"}
 
 
@@ -2778,6 +3140,140 @@ async def api_upload_printed(model_dir: str, file: UploadFile = File(...)):
     write_dir_index(printed_dir, files)
     sync_offline_files_to_meta(target, printed=files)
     return {"status": "ok", "file": dest.name}
+
+
+@app.get("/api/models/{model_dir}/history")
+async def api_model_history(model_dir: str):
+    target = resolve_model_dir(model_dir)
+    return {"items": list_model_meta_backups(target)}
+
+
+@app.post("/api/models/{model_dir}/edit")
+async def api_edit_model(
+    model_dir: str,
+    title: str = Form(""),
+    tags: str = Form(""),
+    category: str = Form(""),
+    version_note: str = Form(""),
+    summary_html: str = Form(""),
+    keep_design_images: str = Form("[]"),
+    cover_name: str = Form(""),
+    design_images: List[UploadFile] = File([]),
+):
+    target = resolve_model_dir(model_dir)
+    meta_path = target / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(404, "meta.json 不存在")
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(500, f"读取 meta.json 失败: {e}")
+    if not isinstance(meta, dict):
+        raise HTTPException(500, "meta.json 格式无效")
+
+    title_value = validate_text_field("标题", title, required=True, max_length=120)
+    category_value = validate_text_field("分类", category, max_length=40)
+    version_note_value = validate_text_field("版本备注", version_note, max_length=200)
+    summary_value = validate_text_field("说明", summary_html, max_length=50000)
+    tag_list = split_tags_input(tags)
+    if len(tag_list) > 30:
+        raise HTTPException(400, "标签数量不能超过 30")
+    for tag in tag_list:
+        validate_text_field("标签", tag, max_length=32)
+
+    existing_design = normalize_existing_design_images(meta)
+    keep_list_raw = parse_json_list(keep_design_images)
+    keep_list = []
+    keep_seen = set()
+    for item in keep_list_raw:
+        name = Path(item).name
+        if name in existing_design and name not in keep_seen:
+            keep_seen.add(name)
+            keep_list.append(name)
+
+    images_dir = target / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded_names: List[str] = []
+    for upload in design_images:
+        if not upload or not upload.filename:
+            continue
+        if not is_image_upload(upload):
+            raise HTTPException(400, f"仅支持图片文件: {upload.filename}")
+        safe_name = sanitize_filename(Path(upload.filename).name)
+        if not safe_name:
+            safe_name = f"design_{len(existing_design) + len(uploaded_names) + 1:02d}{pick_ext(upload.filename, '.jpg')}"
+        dest = ensure_unique_path(images_dir / safe_name)
+        save_upload_file(upload, dest)
+        uploaded_names.append(dest.name)
+
+    final_design_images = keep_list + uploaded_names
+    cover_value = Path(str(cover_name or "")).name
+    if cover_value and cover_value not in final_design_images:
+        raise HTTPException(400, "封面图片必须来自当前保留图片或新上传图片")
+
+    deleted_names = [name for name in existing_design if name not in keep_list]
+
+    backup_path = backup_model_meta(meta_path)
+    meta = update_editable_model_meta(
+        meta,
+        title=title_value,
+        tags=tag_list,
+        category=category_value,
+        version_note=version_note_value,
+        summary_html=summary_value,
+        design_images=final_design_images,
+        cover_name=cover_value,
+    )
+    save_model_meta(meta_path, meta)
+    sync_offline_files_to_meta(target)
+
+    for name in deleted_names:
+        try:
+            (images_dir / name).unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("删除旧设计图失败: %s (%s)", name, e)
+
+    return {
+        "status": "ok",
+        "message": "模型信息已保存",
+        "backup": backup_path.name if backup_path else "",
+        "design_image_count": len(final_design_images),
+    }
+
+
+@app.post("/api/models/{model_dir}/history/restore-latest")
+async def api_restore_model_latest_backup(model_dir: str):
+    target = resolve_model_dir(model_dir)
+    meta_path = target / "meta.json"
+    backups = list_model_meta_backups(target)
+    if not backups:
+        raise HTTPException(404, "没有可恢复的备份")
+
+    latest_name = backups[0]["name"]
+    if "/" in latest_name or "\\" in latest_name:
+        raise HTTPException(400, "备份文件名无效")
+    backup_path = target / META_HISTORY_DIR_NAME / latest_name
+    if not backup_path.exists():
+        raise HTTPException(404, "备份文件不存在")
+
+    try:
+        backup_data = json.loads(backup_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(500, f"读取备份失败: {e}")
+    if not isinstance(backup_data, dict):
+        raise HTTPException(500, "备份内容格式无效")
+
+    current_backup = backup_model_meta(meta_path)
+    save_model_meta(meta_path, backup_data)
+    sync_offline_files_to_meta(target)
+    return {
+        "status": "ok",
+        "message": "已恢复最近一次备份",
+        "restored_from": latest_name,
+        "backup_of_current": current_backup.name if current_backup else "",
+    }
 
 
 @app.post("/api/manual/3mf/parse")
@@ -3334,11 +3830,43 @@ async def api_delete_model(model_dir: str):
         logger.exception("删除目录失败")
         raise HTTPException(500, f"删除失败: {e}")
 
-    flags = load_gallery_flags()
-    flags["favorites"] = [x for x in flags.get("favorites", []) if x != model_dir]
-    flags["printed"] = [x for x in flags.get("printed", []) if x != model_dir]
-    save_gallery_flags(flags)
+    save_gallery_flags(remove_model_dirs_from_gallery_flags(load_gallery_flags(), [model_dir]))
     return {"status": "ok"}
+
+
+@app.post("/api/models/batch-delete")
+async def api_batch_delete_models(body: dict):
+    payload = body if isinstance(body, dict) else {}
+    model_dirs_raw = payload.get("model_dirs") if isinstance(payload.get("model_dirs"), list) else []
+    model_dirs = []
+    for item in model_dirs_raw:
+        value = str(item or "").strip()
+        if value and value not in model_dirs:
+            model_dirs.append(value)
+    if not model_dirs:
+        raise HTTPException(400, "model_dirs 不能为空")
+
+    deleted = []
+    failed = []
+    for model_dir in model_dirs:
+        try:
+            target = resolve_model_dir(model_dir)
+            shutil.rmtree(target)
+            deleted.append(model_dir)
+        except HTTPException as exc:
+            failed.append({"model_dir": model_dir, "message": str(exc.detail)})
+        except Exception as exc:
+            logger.exception("批量删除目录失败: %s", model_dir)
+            failed.append({"model_dir": model_dir, "message": str(exc)})
+
+    if deleted:
+        save_gallery_flags(remove_model_dirs_from_gallery_flags(load_gallery_flags(), deleted))
+
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "failed": failed,
+    }
 
 
 # ---------- v2: 模板渲染模型详情页（测试） ----------

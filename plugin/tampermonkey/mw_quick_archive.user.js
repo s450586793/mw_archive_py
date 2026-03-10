@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MakerWorld 快速归档助手
 // @namespace    https://makerworld.com.cn/
-// @version      1.0.1
+// @version      1.0.2
 // @description  在 MakerWorld 模型页一键归档，支持后端地址与手动 Cookie 配置
 // @author       sonic
 // @match        https://makerworld.com.cn/zh/models/*
@@ -140,6 +140,24 @@
     }
   }
 
+  async function redownloadMissing3mf() {
+    const api = getApiBase();
+    notify('开始重下缺失 3MF...');
+    try {
+      const data = await requestJson('POST', `${api}/api/logs/missing-3mf/redownload`);
+      const processed = Number(data.processed || 0);
+      const success = Number(data.success || 0);
+      const failed = Number(data.failed || 0);
+      if (processed <= 0) {
+        notify('缺失 3MF 列表为空，无需重下');
+        return;
+      }
+      notify(`缺失 3MF 重下完成: 成功 ${success}，失败 ${failed}，共 ${processed}`);
+    } catch (err) {
+      notify(`缺失 3MF 重下失败: ${err.message}`);
+    }
+  }
+
   function openSettingsModal() {
     let modal = document.getElementById(MODAL_ID);
     if (!modal) {
@@ -262,6 +280,7 @@
 
   GM_registerMenuCommand('⚙️ 设置后端地址与手动 Cookie', openSettingsModal);
   GM_registerMenuCommand('归档当前模型', archiveCurrentModel);
+  GM_registerMenuCommand('重新下载缺失 3MF 文件', redownloadMissing3mf);
   GM_registerMenuCommand('🍪 手动 Cookie 同步到后端', async () => {
     const manual = getManualCookie();
     if (!manual) {

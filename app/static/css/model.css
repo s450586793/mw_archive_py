@@ -338,6 +338,16 @@ body {
     line-height: var(--line-height-tight);
 }
 
+.info-toolbar__msg {
+    min-height: 20px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.info-toolbar__msg.error {
+    color: var(--color-error);
+}
+
 .title a.origin-link {
     font-size: var(--font-size-sm);
     display: inline-flex;
@@ -355,6 +365,26 @@ body {
 .title a.origin-link:hover {
     background: var(--color-primary);
     color: #fff;
+}
+
+.download-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(229, 57, 53, 0.28);
+    background: rgba(229, 57, 53, 0.10);
+    color: #b42318;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.download-warning i {
+    font-size: 14px;
+    color: inherit;
 }
 
 .author {
@@ -419,6 +449,43 @@ body {
     font-size: var(--font-size-sm);
     color: var(--text-tertiary);
     margin-bottom: var(--spacing-md);
+}
+
+.meta-extra {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.meta-extra__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.info-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 12px 0 14px;
+}
+
+.model-edit-open-btn {
+    padding: 8px 16px;
+    border-radius: 12px;
+    background: var(--bg-hover);
+}
+
+.model-edit-open-btn:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
 }
 
 /* 统计与操作行 */
@@ -1257,6 +1324,229 @@ body {
 @media (max-width: 900px) {
     .inst-import-grid,
     .inst-import-assets {
+        grid-template-columns: 1fr;
+    }
+}
+
+.model-edit-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.56);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10002;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.model-edit-modal.active {
+    display: flex;
+}
+
+.model-edit-modal__inner {
+    width: min(980px, 96vw);
+    max-height: 92vh;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.model-edit-modal__header,
+.model-edit-modal__footer {
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.model-edit-modal__header h3 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.model-edit-modal__footer {
+    border-top: 1px solid var(--border-color);
+    border-bottom: none;
+    justify-content: flex-end;
+}
+
+.model-edit-close {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.model-edit-modal__body {
+    padding: 18px;
+    overflow: auto;
+}
+
+.model-edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.model-edit-field {
+    margin-bottom: 14px;
+}
+
+.model-edit-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.model-edit-field input,
+.model-edit-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.model-edit-field textarea {
+    resize: vertical;
+    min-height: 96px;
+}
+
+.model-edit-richtext {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg-card);
+}
+
+.model-edit-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.model-edit-tool {
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    min-width: 38px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+}
+
+.model-edit-tool:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+.model-edit-editor {
+    min-height: 260px;
+    padding: 14px 16px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    outline: none;
+}
+
+.model-edit-editor:empty::before {
+    content: "支持富文本编辑，可直接粘贴 HTML 或使用工具栏排版";
+    color: var(--text-tertiary);
+}
+
+.model-edit-editor p,
+.model-edit-editor h2,
+.model-edit-editor h3,
+.model-edit-editor ul,
+.model-edit-editor ol {
+    margin: 0 0 12px;
+}
+
+.model-edit-editor img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 10px;
+}
+
+.model-edit-tip,
+.model-edit-history,
+.model-edit-status {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.model-edit-status.error {
+    color: var(--color-error);
+}
+
+.model-edit-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.model-edit-gallery-item {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-hover);
+    overflow: hidden;
+}
+
+.model-edit-gallery-item img {
+    width: 100%;
+    height: 130px;
+    object-fit: cover;
+    display: block;
+    background: #111;
+}
+
+.model-edit-gallery-meta {
+    padding: 10px;
+}
+
+.model-edit-gallery-name {
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+
+.model-edit-gallery-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.model-edit-upload {
+    margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+    .model-edit-grid {
         grid-template-columns: 1fr;
     }
 }
