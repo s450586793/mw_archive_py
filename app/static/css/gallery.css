@@ -225,6 +225,10 @@ header {
   font-weight: 600;
 }
 
+.side-item.active.side-item--folder {
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.24);
+}
+
 /* Main Content */
 .content {
   flex: 1;
@@ -252,6 +256,17 @@ header {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+#selectionToggleBtn.active,
+#selectionToggleBtn.has-selection {
+  border-color: var(--color-primary);
+  background: var(--bg-active-soft-2);
+  color: var(--color-primary);
+}
+
+#selectionToggleBtn.has-selection {
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.16);
 }
 
 .selection-bar {
@@ -353,6 +368,33 @@ header {
 
 .card:hover .card-cover img {
   transform: scale(1.02);
+}
+
+.card-cover__overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 16px 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(15, 23, 42, 0.58) 70%, rgba(15, 23, 42, 0.82) 100%);
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  pointer-events: none;
+}
+
+.card-cover__overlay-track {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.card-cover__overlay-text {
+  display: inline-block;
+  min-width: 100%;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .card-select-toggle {
@@ -718,6 +760,15 @@ body.compact-mode .card-cover img {
   transform: scale(1.06);
 }
 
+body.compact-mode .card-cover__overlay {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+body.compact-mode .card:hover .card-cover__overlay-text {
+  animation: compact-title-marquee 6s linear infinite;
+}
+
 body.compact-mode .card-meta,
 body.compact-mode .stats,
 body.compact-mode .card-dates,
@@ -726,12 +777,22 @@ body.compact-mode .card-actions {
 }
 
 body.compact-mode .card-body {
-  padding: 14px 16px 16px;
+  display: none;
 }
 
-body.compact-mode .title {
-  margin: 0;
-  -webkit-line-clamp: 1;
+@keyframes compact-title-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  10% {
+    transform: translateX(0);
+  }
+  90% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
 }
 
 /* Load More Indicator */

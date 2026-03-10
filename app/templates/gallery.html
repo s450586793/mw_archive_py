@@ -81,6 +81,11 @@
           </button>
         </div>
 
+        <div class="side-title folder-title"><i class="fas fa-folder-tree"></i> 收藏夹</div>
+        <div id="folderMenu" class="side-menu">
+          <!-- JS will populate folders -->
+        </div>
+
         <!-- Tags Group -->
         <div class="side-title tag-title"><i class="fas fa-tags"></i> 分类</div>
         <div id="filterChips" class="side-menu tag-list">
@@ -91,11 +96,6 @@
         <div class="side-title author-title"><i class="fas fa-user"></i> 作者</div>
         <div id="authorChips" class="side-menu">
           <!-- JS will populate vertical items -->
-        </div>
-
-        <div class="side-title folder-title"><i class="fas fa-folder-tree"></i> 收藏夹</div>
-        <div id="folderMenu" class="side-menu">
-          <!-- JS will populate folders -->
         </div>
       </aside>
 
@@ -129,6 +129,9 @@
           <div class="selection-bar__actions">
             <button class="btn btn-secondary" type="button" id="addToFolderBtn">
               <i class="fas fa-folder-plus"></i> 加入收藏夹
+            </button>
+            <button class="btn btn-outline" type="button" id="removeFromFolderBtn" style="display:none;">
+              <i class="fas fa-folder-minus"></i> 移出当前收藏夹
             </button>
             <button class="btn btn-danger" type="button" id="batchDeleteBtn">
               <i class="fas fa-trash-alt"></i> 批量删除

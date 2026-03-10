@@ -39,6 +39,7 @@ const selectionBar = document.getElementById("selectionBar");
 const selectedCountEl = document.getElementById("selectedCount");
 const clearSelectionBtn = document.getElementById("clearSelectionBtn");
 const addToFolderBtn = document.getElementById("addToFolderBtn");
+const removeFromFolderBtn = document.getElementById("removeFromFolderBtn");
 const batchDeleteBtn = document.getElementById("batchDeleteBtn");
 const folderModal = document.getElementById("folderModal");
 const folderOptionList = document.getElementById("folderOptionList");
@@ -232,6 +233,7 @@ function syncFlagFilterButtons() {
 function syncModeButtons() {
   if (selectionToggleBtn) {
     selectionToggleBtn.classList.toggle("active", selectionMode);
+    selectionToggleBtn.classList.toggle("has-selection", selectionMode && selectedModelKeys.size > 0);
     selectionToggleBtn.setAttribute("aria-pressed", selectionMode ? "true" : "false");
   }
   if (compactToggleBtn) {
@@ -247,8 +249,13 @@ function syncSelectionBar() {
   if (selectedCountEl) selectedCountEl.textContent = String(count);
   if (selectionBar) selectionBar.style.display = selectionMode ? "flex" : "none";
   if (addToFolderBtn) addToFolderBtn.disabled = count === 0;
+  if (removeFromFolderBtn) {
+    removeFromFolderBtn.disabled = count === 0 || !activeFolder;
+    removeFromFolderBtn.style.display = activeFolder ? "inline-flex" : "none";
+  }
   if (batchDeleteBtn) batchDeleteBtn.disabled = count === 0;
   if (clearSelectionBtn) clearSelectionBtn.disabled = count === 0;
+  if (selectionToggleBtn) selectionToggleBtn.classList.toggle("has-selection", selectionMode && count > 0);
 }
 
 function createFilterChip({ label, value, count, isActive, onSelect, extraClass, subLabel }) {
@@ -402,6 +409,31 @@ async function batchDeleteSelected() {
   } catch (e) {
     console.error("批量删除失败", e);
     alert("批量删除失败，请检查服务器日志");
+  }
+}
+
+async function removeSelectedFromActiveFolder() {
+  if (!activeFolder) return;
+  const selectedKeys = Array.from(selectedModelKeys);
+  if (!selectedKeys.length) return;
+  const folder = getFolderById(activeFolder);
+  if (!folder) return;
+  const nextFolders = cloneFolders().map((item) => {
+    if (item.id !== activeFolder) return item;
+    return {
+      ...item,
+      modelDirs: item.modelDirs.filter((dir) => !selectedKeys.includes(dir)),
+      updatedAt: new Date().toISOString()
+    };
+  });
+  folders = normalizeFolders(nextFolders);
+  try {
+    await saveFlags();
+    clearSelection();
+    renderAll();
+  } catch (e) {
+    console.error("移出收藏夹失败", e);
+    alert("移出收藏夹失败，请稍后重试");
   }
 }
 
@@ -760,6 +792,17 @@ function renderGrid(append = false) {
     cover.alt = m.title || m.baseName || "模型封面";
     cover.onerror = () => { cover.src = "/static/imgs/fav.png"; };
     coverWrap.appendChild(cover);
+
+    const compactOverlay = document.createElement("div");
+    compactOverlay.className = "card-cover__overlay";
+    const compactOverlayTrack = document.createElement("div");
+    compactOverlayTrack.className = "card-cover__overlay-track";
+    const compactOverlayText = document.createElement("span");
+    compactOverlayText.className = "card-cover__overlay-text";
+    compactOverlayText.textContent = m.title || m.baseName || "未知模型";
+    compactOverlayTrack.appendChild(compactOverlayText);
+    compactOverlay.appendChild(compactOverlayTrack);
+    coverWrap.appendChild(compactOverlay);
     card.appendChild(coverWrap);
 
     const body = document.createElement("div");
@@ -1066,6 +1109,7 @@ if (compactToggleBtn) {
 
 if (clearSelectionBtn) clearSelectionBtn.addEventListener("click", clearSelection);
 if (addToFolderBtn) addToFolderBtn.addEventListener("click", openFolderModal);
+if (removeFromFolderBtn) removeFromFolderBtn.addEventListener("click", removeSelectedFromActiveFolder);
 if (batchDeleteBtn) batchDeleteBtn.addEventListener("click", batchDeleteSelected);
 if (folderModalSaveBtn) folderModalSaveBtn.addEventListener("click", saveFolderSelection);
 if (folderModalCloseBtn) folderModalCloseBtn.addEventListener("click", closeFolderModal);
