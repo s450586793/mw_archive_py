@@ -38,6 +38,7 @@
 - 支持从归档模型、图片、实例 3MF、说明等内容到本地
 - 支持一键重建历史归档页面，版本升级后同步旧数据展示效果
 - 支持 Telegram 成功通知、失败告警与机器人链接归档
+- 支持 Telegram 命令重试缺失 3MF 下载
 - 支持国内 / 国际平台分别配置 Cookie
 
 ## 项目结构
@@ -258,6 +259,23 @@ docker-compose up -d
 随便打开一个模型，按 `F12`，选择 `Network`，然后刷新页面，找到请求，复制完整 `Cookie`。
 
 ![cookie](doc/screenshot/完整cookie获取.png)
+
+### Tampermonkey 油猴脚本
+- 说明文档：[plugin/tampermonkey/使用说明.md](plugin/tampermonkey/使用说明.md)
+- 当前菜单项包括：
+  - `⚙️ 设置后端地址与手动 Cookie`
+  - `归档当前模型`
+  - `重新下载缺失 3MF 文件`
+  - `🍪 手动 Cookie 同步到后端`
+
+### Telegram 机器人命令
+- `/help`：查看命令说明
+- `/cookies`：查看当前 Cookie 状态
+- `/count`：查看已归档模型数
+- `/search 关键词`：搜索本地模型
+- `/url`：查看在线地址前缀
+- `/seturl 地址`：设置在线地址前缀
+- `/redl`：重新下载缺失的 3MF 文件
 
 **Cookie 失效问题：**
 有时候 Cookie 并不是真的失效，而是触发了验证，需要先手动下载一个模型完成验证。

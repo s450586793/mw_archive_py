@@ -1777,6 +1777,26 @@ def tg_set_base_url(raw_url: str) -> str:
     return f"✅ 在线地址前缀已更新为：\n{value}"
 
 
+def tg_redownload_missing_3mf_text() -> str:
+    try:
+        result = retry_missing_downloads(CFG)
+    except Exception as e:
+        logger.exception("Telegram 触发缺失 3MF 重下失败")
+        return f"❌ 缺失 3MF 重下失败：{e}"
+
+    processed = int(result.get("processed") or 0)
+    success = int(result.get("success") or 0)
+    failed = int(result.get("failed") or 0)
+    if processed <= 0:
+        return "📭 缺失 3MF 列表为空，无需重下。"
+    return (
+        "✅ 缺失 3MF 重下完成\n"
+        f"总数：{processed}\n"
+        f"成功：{success}\n"
+        f"失败：{failed}"
+    )
+
+
 def classify_archive_exception(err: Exception) -> tuple[str, str]:
     if isinstance(err, requests.HTTPError):
         resp = err.response
@@ -2336,6 +2356,7 @@ TG_SERVICE = TelegramPushService(
     on_search=tg_search_models_text,
     on_get_base_url=tg_get_base_url_text,
     on_set_base_url=tg_set_base_url,
+    on_redownload_missing=tg_redownload_missing_3mf_text,
 )
 NOTIFIER = NotificationDispatcher(logger)
 NOTIFIER.register("telegram", TG_SERVICE)
