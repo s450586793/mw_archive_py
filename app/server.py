@@ -42,6 +42,13 @@ from batch_import_service import (
     scan_batch_import,
 )
 from batch_import_watcher import LocalBatchImportWatcher
+from gallery_index import (
+    GALLERY_INDEX_PATH,
+    get_gallery_items,
+    rebuild_gallery_index,
+    remove_gallery_index_entries,
+    upsert_gallery_index_entry,
+)
 from local_3mf_organizer import (
     DEFAULT_ORGANIZER_CONFIG,
     build_runtime_local_3mf_organizer_config,
@@ -2354,60 +2361,36 @@ def redownload_model_by_id(cfg, model_id: int):
 
 
 def scan_gallery(cfg) -> List[dict]:
-    root = Path(cfg["download_dir"])
-    items = []
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-        if d.name.startswith(".") or d.name.startswith("_"):
-            continue
-        if not (
-            d.name.startswith("MW_")
-            or d.name.startswith("Others_")
-            or d.name.startswith("LocalModel_")
-        ):
-            continue
-        meta = d / "meta.json"
-        if not meta.exists():
-            continue
-        try:
-            data = json.loads(meta.read_text(encoding="utf-8"))
-            images = data.get("images") or {}
-            cover_name = images.get("cover") or ""
-            cover_file = (d / "images" / cover_name).name if cover_name else ""
-            summary_data = data.get("summary") or {}
-            raw_summary = summary_data.get("text") or summary_data.get("raw") or summary_data.get("html") or ""
-            instances = data.get("instances") or []
-            published_at = None
-            for inst in instances:
-                ts = inst.get("publishTime")
-                if ts and (published_at is None or ts < published_at):
-                    published_at = ts
-            author = data.get("author") or {}
-            collected_at = resolve_collect_iso(data, meta)
-            source_value = normalize_model_source(data, d.name)
-            items.append({
-                "baseName": data.get("baseName") or d.name,
-                "title": data.get("title"),
-                "id": data.get("id"),
-                "cover": cover_file,
-                "dir": d.name,
-                "source": source_value,
-                "tags": data.get("tags") or [],
-                "summary": strip_html(raw_summary),
-                "author": {
-                    "name": author.get("name"),
-                    "url": author.get("url"),
-                    "avatarRelPath": author.get("avatarRelPath"),
-                },
-                "stats": data.get("stats") or {},
-                "instanceCount": len(instances),
-                "publishedAt": published_at,
-                "collectedAt": collected_at,
-            })
-        except Exception:
-            continue
-    return items
+    return get_gallery_items(cfg["download_dir"], index_path=GALLERY_INDEX_PATH)
+
+
+def sync_gallery_index_for_model(model_dir: Path):
+    try:
+        upsert_gallery_index_entry(CFG["download_dir"], model_dir, index_path=GALLERY_INDEX_PATH)
+    except Exception:
+        logger.exception("更新图库索引失败: %s", model_dir)
+
+
+def remove_gallery_index_for_models(model_dirs: List[str]):
+    try:
+        remove_gallery_index_entries(CFG["download_dir"], model_dirs, index_path=GALLERY_INDEX_PATH)
+    except Exception:
+        logger.exception("删除图库索引项失败: %s", model_dirs)
+
+
+def rebuild_gallery_index_report() -> dict:
+    started_at = datetime.now()
+    payload = rebuild_gallery_index(CFG["download_dir"], index_path=GALLERY_INDEX_PATH)
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    finished_at = datetime.now()
+    return {
+        "status": "ok",
+        "index_path": str(GALLERY_INDEX_PATH.resolve()),
+        "item_count": len(items),
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": max(int(round((finished_at - started_at).total_seconds())), 0),
+    }
 
 
 app = FastAPI()
@@ -2450,6 +2433,13 @@ NOTIFIER.register("telegram", TG_SERVICE)
 def handle_local_batch_import_report(report: dict):
     cfg_now = CFG if isinstance(CFG, dict) else load_config()
     local_cfg = cfg_now.get("local_batch_import") if isinstance(cfg_now.get("local_batch_import"), dict) else {}
+    touched_dirs = []
+    for item in report.get("details") if isinstance(report.get("details"), list) else []:
+        target_model = str(item.get("target_model") or "").strip()
+        if target_model and target_model not in touched_dirs:
+            touched_dirs.append(target_model)
+    for model_dir in touched_dirs:
+        sync_gallery_index_for_model(Path(cfg_now["download_dir"]) / model_dir)
     if not local_cfg.get("notify_on_finish"):
         return
     processed = int(report.get("processed") or 0)
@@ -2532,6 +2522,7 @@ def archive_model_with_lock(url: str) -> dict:
                     save_model_meta(meta_path, meta)
                 except Exception as e:
                     logger.warning("归档后写入模型下载状态失败: %s", e)
+            sync_gallery_index_for_model(final_dir)
             return result
 
         return run_with_cookie_failover(CFG, model_url, "模型归档", _runner)
@@ -3105,6 +3096,15 @@ async def api_gallery():
     return scan_gallery(CFG)
 
 
+@app.post("/api/gallery/rebuild-index")
+async def api_rebuild_gallery_index():
+    try:
+        return rebuild_gallery_index_report()
+    except Exception as e:
+        logger.exception("重建图库索引失败")
+        raise HTTPException(500, f"重建图库索引失败: {e}")
+
+
 @app.get("/api/gallery/flags")
 async def api_gallery_flags():
     return load_gallery_flags()
@@ -3291,6 +3291,7 @@ async def api_edit_model(
     )
     save_model_meta(meta_path, meta)
     sync_offline_files_to_meta(target)
+    sync_gallery_index_for_model(target)
 
     for name in deleted_names:
         try:
@@ -3331,6 +3332,7 @@ async def api_restore_model_latest_backup(model_dir: str):
     current_backup = backup_model_meta(meta_path)
     save_model_meta(meta_path, backup_data)
     sync_offline_files_to_meta(target)
+    sync_gallery_index_for_model(target)
     return {
         "status": "ok",
         "message": "已恢复最近一次备份",
@@ -3504,6 +3506,7 @@ async def api_model_add_instance_from_3mf(
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         sync_offline_files_to_meta(target)
         (target / "index.html").write_text(build_index_html(meta, {}), encoding="utf-8")
+        sync_gallery_index_for_model(target)
 
         return {"status": "ok", "message": f"模型已更新成功：已添加打印配置 {inst_title}", "instance_id": new_id}
     finally:
@@ -3872,6 +3875,7 @@ async def api_manual_import(
     }
     index_html = build_index_html(meta, assets)
     (model_dir / "index.html").write_text(index_html, encoding="utf-8")
+    sync_gallery_index_for_model(model_dir)
 
     # 手动导入成功后，清理对应草稿临时目录，避免 manual_drafts 持续堆积
     if draft_session_dir is not None and draft_session_dir.exists():
@@ -3893,6 +3897,7 @@ async def api_delete_model(model_dir: str):
         logger.exception("删除目录失败")
         raise HTTPException(500, f"删除失败: {e}")
 
+    remove_gallery_index_for_models([model_dir])
     save_gallery_flags(remove_model_dirs_from_gallery_flags(load_gallery_flags(), [model_dir]))
     return {"status": "ok"}
 
@@ -3923,6 +3928,7 @@ async def api_batch_delete_models(body: dict):
             failed.append({"model_dir": model_dir, "message": str(exc)})
 
     if deleted:
+        remove_gallery_index_for_models(deleted)
         save_gallery_flags(remove_model_dirs_from_gallery_flags(load_gallery_flags(), deleted))
 
     return {

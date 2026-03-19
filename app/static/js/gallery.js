@@ -24,6 +24,7 @@ const folderMenu = document.getElementById("folderMenu");
 const clearBtn = document.getElementById("clearBtn");
 const resetSearchBtn = document.getElementById("resetSearchBtn");
 const totalCountEl = document.getElementById("totalCount");
+const refreshIndexBtn = document.getElementById("refreshIndexBtn");
 const sortOrderSelect = document.getElementById("sortOrder");
 const favOnlyBtn = document.getElementById("favOnlyBtn");
 const printedOnlyBtn = document.getElementById("printedOnlyBtn");
@@ -453,6 +454,26 @@ async function load() {
   displayedCount = loadIncrement;
   renderAll();
   setupInfiniteScroll();
+}
+
+async function rebuildGalleryIndex() {
+  if (!refreshIndexBtn) return;
+  const originalHtml = refreshIndexBtn.innerHTML;
+  refreshIndexBtn.disabled = true;
+  refreshIndexBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 刷新中';
+  try {
+    const res = await fetch("/api/gallery/rebuild-index", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.detail || "重建索引失败");
+    await load();
+    alert(`索引刷新完成，共 ${data.item_count || 0} 个模型，耗时 ${data.duration_seconds || 0} 秒`);
+  } catch (e) {
+    console.error("刷新索引失败", e);
+    alert(`刷新索引失败：${e.message || e}`);
+  } finally {
+    refreshIndexBtn.disabled = false;
+    refreshIndexBtn.innerHTML = originalHtml;
+  }
 }
 
 function renderFilters() {
@@ -1074,6 +1095,10 @@ if (sortOrderSelect) {
     displayedCount = loadIncrement;
     renderGrid();
   });
+}
+
+if (refreshIndexBtn) {
+  refreshIndexBtn.addEventListener("click", rebuildGalleryIndex);
 }
 
 if (favOnlyBtn) {
