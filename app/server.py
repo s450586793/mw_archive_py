@@ -95,6 +95,10 @@ DEFAULT_CONFIG = {
         "duplicate_policy": "skip",
     },
     "local_3mf_organizer": deepcopy(DEFAULT_ORGANIZER_CONFIG),
+    "folder_open": {
+        "enabled": True,
+        "local_real_root_path": "",
+    },
     "notifications": {
         "web_base_url": "http://127.0.0.1:8001",
         "telegram": {
@@ -1779,6 +1783,19 @@ def get_telegram_runtime_cfg() -> dict:
     }
 
 
+def get_folder_open_runtime_cfg() -> dict:
+    raw = CFG.get("folder_open") if isinstance(CFG.get("folder_open"), dict) else {}
+    local_real_root = str(
+        raw.get("local_real_root_path")
+        or raw.get("server_real_root_path")
+        or ""
+    ).strip()
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "local_real_root_path": local_real_root,
+    }
+
+
 def get_feishu_runtime_cfg() -> dict:
     fs = (CFG.get("notifications") or {}).get("feishu") or {}
     return {
@@ -2619,6 +2636,7 @@ async def api_config():
     cookie_store = load_cookie_store(cfg)
     tg = get_telegram_runtime_cfg()
     fs = get_feishu_runtime_cfg()
+    folder_open = get_folder_open_runtime_cfg()
     local_batch = cfg.get("local_batch_import") if isinstance(cfg.get("local_batch_import"), dict) else {}
     local_organizer = cfg.get("local_3mf_organizer") if isinstance(cfg.get("local_3mf_organizer"), dict) else {}
     return {
@@ -2653,6 +2671,7 @@ async def api_config():
                 "enable_push": fs["enable_push"],
             }
         },
+        "folder_open": folder_open,
     }
 
 
@@ -2726,6 +2745,35 @@ async def api_notify_test(body: dict = None):
     if result.get("status") != "ok":
         raise HTTPException(400, result.get("message") or "测试连接失败")
     return result
+
+
+@app.get("/api/folder-open/config")
+async def api_get_folder_open_config():
+    return {"status": "ok", "config": get_folder_open_runtime_cfg()}
+
+
+@app.post("/api/folder-open/config")
+async def api_save_folder_open_config(body: dict):
+    payload = body or {}
+    incoming = payload.get("folder_open") if isinstance(payload.get("folder_open"), dict) else payload
+    local_real_root = str(incoming.get("local_real_root_path") or "").strip()
+    enabled = bool(incoming.get("enabled", True))
+
+    raw_cfg = load_raw_config()
+    folder_open_raw = raw_cfg.get("folder_open") if isinstance(raw_cfg.get("folder_open"), dict) else {}
+    folder_open_cfg = {
+        "enabled": enabled,
+        "local_real_root_path": local_real_root or str(
+            folder_open_raw.get("local_real_root_path")
+            or folder_open_raw.get("server_real_root_path")
+            or ""
+        ).strip(),
+    }
+    raw_cfg["folder_open"] = folder_open_cfg
+    save_raw_config(raw_cfg)
+
+    CFG.update(build_runtime_config(raw_cfg))
+    return {"status": "ok", "config": get_folder_open_runtime_cfg()}
 
 
 @app.get("/api/local-batch-import/config")
@@ -4118,6 +4166,8 @@ async def api_v2_model_meta(model_dir: str):
                 meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 logger.warning("批量回填 instances.fileName 失败: %s", model_dir)
+
+        data["folder_open"] = get_folder_open_runtime_cfg()
 
         return data
     except Exception as e:
