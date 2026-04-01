@@ -3,7 +3,8 @@
 ## 功能
 - 配置后端 API 地址（默认 `http://127.0.0.1:8000`）
 - 在 `https://makerworld.com.cn/zh/models/*` 和 `https://makerworld.com/zh/models/*` 页面显示「归档模型」按钮
-- 点击扩展图标弹出菜单：保存地址、测试连接、归档当前模型、本地模型主页
+- 模型页显示归档状态标记（已归档绿色 / 未归档灰色，含归档日期）
+- 点击扩展图标弹出菜单：保存地址、测试连接、标记开关、归档当前模型、本地模型主页
 - 点击归档后会弹出明显的开始和完成提示
 
 ## 安装
@@ -20,3 +21,4 @@
 ## 后端接口
 - `POST /api/archive` body: `{ "url": "https://makerworld.com.cn/zh/models/..." }`
 - `GET /api/config`（测试连接）
+- `GET /api/archive/status/{model_id}`（模型归档状态）

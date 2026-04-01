@@ -11,6 +11,12 @@ function normalizeApiBase(raw) {
   return String(raw || "").trim().replace(/\/+$/, "");
 }
 
+function setBadgeToggleLabel(enabled) {
+  const btn = document.getElementById("badgeToggleBtn");
+  if (!btn) return;
+  btn.textContent = enabled ? "标记开" : "标记关";
+}
+
 async function getActiveTabUrl() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs && tabs[0];
@@ -72,9 +78,15 @@ function hidePopupNotice() {
 }
 
 async function init() {
-  const res = await send({ action: "getApiBase" });
-  if (res && res.ok) {
-    document.getElementById("apiBase").value = res.apiBase || "";
+  const [apiRes, badgeRes] = await Promise.all([
+    send({ action: "getApiBase" }),
+    send({ action: "getArchiveBadgeEnabled" })
+  ]);
+  if (apiRes && apiRes.ok) {
+    document.getElementById("apiBase").value = apiRes.apiBase || "";
+  }
+  if (badgeRes && badgeRes.ok) {
+    setBadgeToggleLabel(badgeRes.enabled !== false);
   }
   setStatus("准备就绪");
 }
@@ -144,6 +156,19 @@ document.getElementById("archiveBtn").addEventListener("click", async () => {
     const message = (res && res.message) || "归档失败";
     setStatus(message);
     showPopupNotice("归档失败", message, "error");
+  }
+});
+
+document.getElementById("badgeToggleBtn").addEventListener("click", async () => {
+  const current = await send({ action: "getArchiveBadgeEnabled" });
+  const enabledNow = !!(current && current.ok && current.enabled !== false);
+  const next = !enabledNow;
+  const res = await send({ action: "setArchiveBadgeEnabled", enabled: next });
+  if (res && res.ok) {
+    setBadgeToggleLabel(res.enabled !== false);
+    setStatus(`归档标记已${res.enabled ? "开启" : "关闭"}`);
+  } else {
+    setStatus((res && res.message) || "切换归档标记失败");
   }
 });
 

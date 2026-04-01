@@ -1,4 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+const DEFAULT_ARCHIVE_BADGE_ENABLED = true;
 let archiveInFlight = false;
 
 function normalizeApiBase(raw) {
@@ -16,6 +17,18 @@ async function setApiBase(apiBase) {
   const normalized = normalizeApiBase(apiBase);
   await chrome.storage.local.set({ apiBase: normalized });
   return normalized;
+}
+
+async function getArchiveBadgeEnabled() {
+  const data = await chrome.storage.local.get(["archiveBadgeEnabled"]);
+  if (typeof data.archiveBadgeEnabled === "boolean") return data.archiveBadgeEnabled;
+  return DEFAULT_ARCHIVE_BADGE_ENABLED;
+}
+
+async function setArchiveBadgeEnabled(enabled) {
+  const value = !!enabled;
+  await chrome.storage.local.set({ archiveBadgeEnabled: value });
+  return value;
 }
 
 async function postJson(url, body) {
@@ -55,7 +68,9 @@ async function archiveModel(modelUrl) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   const apiBase = await getApiBase();
+  const badgeEnabled = await getArchiveBadgeEnabled();
   await setApiBase(apiBase);
+  await setArchiveBadgeEnabled(badgeEnabled);
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -68,6 +83,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (action === "setApiBase") {
       const apiBase = await setApiBase(msg.apiBase);
       sendResponse({ ok: true, apiBase });
+      return;
+    }
+    if (action === "getArchiveBadgeEnabled") {
+      sendResponse({ ok: true, enabled: await getArchiveBadgeEnabled() });
+      return;
+    }
+    if (action === "setArchiveBadgeEnabled") {
+      const enabled = await setArchiveBadgeEnabled(msg.enabled);
+      sendResponse({ ok: true, enabled });
       return;
     }
     if (action === "archiveModel") {
