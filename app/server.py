@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from notify_dispatcher import NotificationDispatcher
+from feishu_push import FeishuPushService
 from archiver import (
     archive_model,
     build_index_html,
@@ -95,11 +96,17 @@ DEFAULT_CONFIG = {
     },
     "local_3mf_organizer": deepcopy(DEFAULT_ORGANIZER_CONFIG),
     "notifications": {
+        "web_base_url": "http://127.0.0.1:8001",
         "telegram": {
             "enable_push": False,
             "bot_token": "",
             "chat_id": "",
-            "web_base_url": "http://127.0.0.1:8001",
+        },
+        "feishu": {
+            "enable_push": False,
+            "webhook_url": "",
+            "app_id": "",
+            "app_secret": "",
         },
         # 预留其他通知渠道扩展（例如企业微信）
         "wecom": {
@@ -1769,8 +1776,32 @@ def get_telegram_runtime_cfg() -> dict:
         "enable_push": bool(tg.get("enable_push", False)),
         "bot_token": str(tg.get("bot_token") or "").strip(),
         "chat_id": str(tg.get("chat_id") or "").strip(),
-        "web_base_url": str(tg.get("web_base_url") or "http://127.0.0.1:8000").strip(),
     }
+
+
+def get_feishu_runtime_cfg() -> dict:
+    fs = (CFG.get("notifications") or {}).get("feishu") or {}
+    return {
+        "enable_push": bool(fs.get("enable_push", False)),
+        "webhook_url": str(fs.get("webhook_url") or "").strip(),
+        "app_id": str(fs.get("app_id") or "").strip(),
+        "app_secret": str(fs.get("app_secret") or "").strip(),
+    }
+
+
+def get_notify_web_base_url() -> str:
+    notifications = CFG.get("notifications") if isinstance(CFG.get("notifications"), dict) else {}
+    shared = str((notifications or {}).get("web_base_url") or "").strip()
+    if shared:
+        return shared
+    # 兼容旧配置（已废弃）
+    tg_base = str(((notifications or {}).get("telegram") or {}).get("web_base_url") or "").strip()
+    if tg_base:
+        return tg_base
+    fs_base = str(((notifications or {}).get("feishu") or {}).get("web_base_url") or "").strip()
+    if fs_base:
+        return fs_base
+    return "http://127.0.0.1:8000"
 
 
 def tg_cookie_status_text() -> str:
@@ -1809,8 +1840,7 @@ def tg_search_models_text(keyword: str) -> str:
     if not kw:
         return "🔎 请输入关键词。"
 
-    base_url = get_telegram_runtime_cfg().get("web_base_url") or "http://127.0.0.1:8000"
-    base_url = str(base_url).rstrip("/")
+    base_url = str(get_notify_web_base_url() or "http://127.0.0.1:8000").rstrip("/")
 
     root = Path(CFG["download_dir"])
     if not root.exists():
@@ -1848,7 +1878,7 @@ def tg_search_models_text(keyword: str) -> str:
 
 
 def tg_get_base_url_text() -> str:
-    base_url = str(get_telegram_runtime_cfg().get("web_base_url") or "http://127.0.0.1:8000").strip()
+    base_url = str(get_notify_web_base_url() or "http://127.0.0.1:8000").strip()
     return base_url.rstrip("/")
 
 
@@ -1860,9 +1890,7 @@ def tg_set_base_url(raw_url: str) -> str:
 
     raw_cfg = load_raw_config()
     notifications = raw_cfg.get("notifications") if isinstance(raw_cfg.get("notifications"), dict) else {}
-    telegram_cfg = notifications.get("telegram") if isinstance(notifications.get("telegram"), dict) else {}
-    telegram_cfg["web_base_url"] = value
-    notifications["telegram"] = telegram_cfg
+    notifications["web_base_url"] = value
     raw_cfg["notifications"] = notifications
     save_raw_config(raw_cfg)
     CFG.update(build_runtime_config(raw_cfg))
@@ -2426,8 +2454,13 @@ TG_SERVICE = TelegramPushService(
     on_set_base_url=tg_set_base_url,
     on_redownload_missing=tg_redownload_missing_3mf_text,
 )
+FEISHU_SERVICE = FeishuPushService(
+    cfg_getter=get_feishu_runtime_cfg,
+    logger=logger,
+)
 NOTIFIER = NotificationDispatcher(logger)
 NOTIFIER.register("telegram", TG_SERVICE)
+NOTIFIER.register("feishu", FEISHU_SERVICE)
 
 
 def handle_local_batch_import_report(report: dict):
@@ -2459,7 +2492,7 @@ LOCAL_BATCH_WATCHER = LocalBatchImportWatcher(
 
 
 def build_archive_notify_payload(result: dict, final_dir: Path) -> dict:
-    base_url = str(get_telegram_runtime_cfg().get("web_base_url") or "http://127.0.0.1:8000").rstrip("/")
+    base_url = str(get_notify_web_base_url() or "http://127.0.0.1:8000").rstrip("/")
     payload = {
         "action": result.get("action") or "created",
         "base_name": result.get("base_name") or final_dir.name,
@@ -2585,6 +2618,7 @@ async def api_config():
     cookie_time = cookie_path.stat().st_mtime if cookie_path.exists() else None
     cookie_store = load_cookie_store(cfg)
     tg = get_telegram_runtime_cfg()
+    fs = get_feishu_runtime_cfg()
     local_batch = cfg.get("local_batch_import") if isinstance(cfg.get("local_batch_import"), dict) else {}
     local_organizer = cfg.get("local_3mf_organizer") if isinstance(cfg.get("local_3mf_organizer"), dict) else {}
     return {
@@ -2614,6 +2648,9 @@ async def api_config():
         "notify": {
             "telegram": {
                 "enable_push": tg["enable_push"],
+            },
+            "feishu": {
+                "enable_push": fs["enable_push"],
             }
         },
     }
@@ -2621,37 +2658,70 @@ async def api_config():
 
 @app.get("/api/notify-config")
 async def api_get_notify_config():
-    return {"telegram": get_telegram_runtime_cfg()}
+    return {
+        "web_base_url": str(get_notify_web_base_url() or "http://127.0.0.1:8000").strip(),
+        "telegram": get_telegram_runtime_cfg(),
+        "feishu": get_feishu_runtime_cfg(),
+    }
 
 
 @app.post("/api/notify-config")
 async def api_save_notify_config(body: dict):
     payload = body or {}
+    shared_web_base = str(payload.get("web_base_url") or "").strip()
     tg_payload = payload.get("telegram") if isinstance(payload.get("telegram"), dict) else {}
+    fs_payload = payload.get("feishu") if isinstance(payload.get("feishu"), dict) else {}
 
     raw_cfg = load_raw_config()
     notifications = raw_cfg.get("notifications") if isinstance(raw_cfg.get("notifications"), dict) else {}
     telegram_cfg = notifications.get("telegram") if isinstance(notifications.get("telegram"), dict) else {}
+    feishu_cfg = notifications.get("feishu") if isinstance(notifications.get("feishu"), dict) else {}
 
     telegram_cfg["enable_push"] = bool(tg_payload.get("enable_push", telegram_cfg.get("enable_push", False)))
     telegram_cfg["bot_token"] = str(tg_payload.get("bot_token", telegram_cfg.get("bot_token", ""))).strip()
     telegram_cfg["chat_id"] = str(tg_payload.get("chat_id", telegram_cfg.get("chat_id", ""))).strip()
-    telegram_cfg["web_base_url"] = str(
-        tg_payload.get("web_base_url", telegram_cfg.get("web_base_url", "http://127.0.0.1:8000"))
-    ).strip()
+    feishu_cfg["enable_push"] = bool(fs_payload.get("enable_push", feishu_cfg.get("enable_push", False)))
+    feishu_cfg["webhook_url"] = str(fs_payload.get("webhook_url", feishu_cfg.get("webhook_url", ""))).strip()
+    feishu_cfg["app_id"] = str(fs_payload.get("app_id", feishu_cfg.get("app_id", ""))).strip()
+    feishu_cfg["app_secret"] = str(fs_payload.get("app_secret", feishu_cfg.get("app_secret", ""))).strip()
+    notifications["web_base_url"] = shared_web_base or str(notifications.get("web_base_url") or "http://127.0.0.1:8000").strip()
 
     notifications["telegram"] = telegram_cfg
+    notifications["feishu"] = feishu_cfg
     raw_cfg["notifications"] = notifications
     save_raw_config(raw_cfg)
 
     # 持久化后刷新运行时配置
     CFG.update(build_runtime_config(raw_cfg))
     sync_runtime_services()
-    return {"status": "ok", "telegram": get_telegram_runtime_cfg()}
+    return {
+        "status": "ok",
+        "web_base_url": str(get_notify_web_base_url() or "http://127.0.0.1:8000").strip(),
+        "telegram": get_telegram_runtime_cfg(),
+        "feishu": get_feishu_runtime_cfg(),
+    }
 
 
 @app.post("/api/notify-test")
-async def api_notify_test():
+async def api_notify_test(body: dict = None):
+    payload = body or {}
+    channel = str(payload.get("channel") or "").strip().lower()
+    if channel:
+        service_map = {
+            "telegram": TG_SERVICE,
+            "feishu": FEISHU_SERVICE,
+        }
+        service = service_map.get(channel)
+        if service is None:
+            raise HTTPException(400, "不支持的通知渠道")
+        fn = getattr(service, "send_test_connection", None)
+        if not callable(fn):
+            raise HTTPException(400, "该渠道不支持测试")
+        result = fn() or {}
+        if result.get("status") != "ok":
+            raise HTTPException(400, result.get("message") or "测试连接失败")
+        return {"status": "ok", "channel": channel, "result": result}
+
     result = NOTIFIER.send_test_connection()
     if result.get("status") != "ok":
         raise HTTPException(400, result.get("message") or "测试连接失败")

@@ -306,6 +306,15 @@
       <!-- Tab Content: Notify -->
       <div class="tab-content" id="tab-notify">
         <div class="form-section">
+          <h3>通知公共配置</h3>
+          <div class="form-group">
+            <label class="form-label">项目在线地址前缀（所有通知共用）</label>
+            <input type="text" id="notifyWebBaseUrl" class="form-input" placeholder="http://127.0.0.1:8000">
+            <div class="text-muted text-small mt-sm">用于通知消息中生成在线访问地址（/v2/files/...）。</div>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3>通知配置（Telegram）</h3>
           <div class="tg-toggle-row">
             <span class="tg-toggle-title">推送开关</span>
@@ -324,18 +333,51 @@
             <input type="text" id="tgChatId" class="form-input" placeholder="-1001234567890, 496548857">
             <div class="text-muted text-small mt-sm">多个 Chat ID 用英文逗号分隔。</div>
           </div>
+
+          <div class="table-actions">
+            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection('telegram')">
+              <i class="fas fa-satellite-dish"></i> 测试 Telegram
+            </button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>通知配置（飞书）</h3>
+          <div class="tg-toggle-row">
+            <span class="tg-toggle-title">推送开关</span>
+            <label class="tg-switch" for="fsEnablePush">
+              <input type="checkbox" id="fsEnablePush">
+              <span class="tg-slider"></span>
+            </label>
+          </div>
+
           <div class="form-group">
-            <label class="form-label">项目在线地址前缀</label>
-            <input type="text" id="tgWebBaseUrl" class="form-input" placeholder="http://127.0.0.1:8000">
-            <div class="text-muted text-small mt-sm">用于 Telegram 成功消息中生成本地在线访问地址（/v2/files/...）</div>
+            <label class="form-label">飞书机器人 Webhook</label>
+            <input type="text" id="fsWebhookUrl" class="form-input" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+            <div class="text-muted text-small mt-sm">仅配置 Webhook 时可发送文本通知。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">企业应用 App ID（可选）</label>
+            <input type="text" id="fsAppId" class="form-input" placeholder="cli_xxxxx">
+            <div class="text-muted text-small mt-sm">配置 App ID + App Secret 后自动启用图文消息（先传图再推送）。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">企业应用 App Secret（可选）</label>
+            <input type="text" id="fsAppSecret" class="form-input" placeholder="xxxxxxxx">
+            <div class="text-muted text-small mt-sm">用于获取 tenant_access_token；缺失时不上传图片。</div>
           </div>
 
           <div class="table-actions">
-            <button class="btn btn-primary" type="button" onclick="saveNotifyConfig()">
-              <i class="fas fa-save"></i> 保存通知配置
+            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection('feishu')">
+              <i class="fas fa-satellite-dish"></i> 测试飞书
             </button>
-            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection()">
-              <i class="fas fa-satellite-dish"></i> 测试连接
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="table-actions">
+            <button class="btn btn-primary" type="button" onclick="saveNotifyConfig()">
+              <i class="fas fa-save"></i> 保存当前页面设置
             </button>
           </div>
         </div>
@@ -702,19 +744,30 @@
       if (!res.ok) return;
       const data = await res.json();
       const tg = (data && data.telegram) || {};
+      const fs = (data && data.feishu) || {};
+      document.getElementById('notifyWebBaseUrl').value = (data && data.web_base_url) || 'http://127.0.0.1:8000';
       document.getElementById('tgEnablePush').checked = !!tg.enable_push;
       document.getElementById('tgBotToken').value = tg.bot_token || '';
       document.getElementById('tgChatId').value = tg.chat_id || '';
-      document.getElementById('tgWebBaseUrl').value = tg.web_base_url || 'http://127.0.0.1:8000';
+      document.getElementById('fsEnablePush').checked = !!fs.enable_push;
+      document.getElementById('fsWebhookUrl').value = fs.webhook_url || '';
+      document.getElementById('fsAppId').value = fs.app_id || '';
+      document.getElementById('fsAppSecret').value = fs.app_secret || '';
     }
 
     async function saveNotifyConfig() {
       const payload = {
+        web_base_url: (document.getElementById('notifyWebBaseUrl').value || '').trim(),
         telegram: {
           enable_push: !!document.getElementById('tgEnablePush').checked,
           bot_token: (document.getElementById('tgBotToken').value || '').trim(),
           chat_id: (document.getElementById('tgChatId').value || '').trim(),
-          web_base_url: (document.getElementById('tgWebBaseUrl').value || '').trim(),
+        },
+        feishu: {
+          enable_push: !!document.getElementById('fsEnablePush').checked,
+          webhook_url: (document.getElementById('fsWebhookUrl').value || '').trim(),
+          app_id: (document.getElementById('fsAppId').value || '').trim(),
+          app_secret: (document.getElementById('fsAppSecret').value || '').trim(),
         }
       };
       appendLog('保存通知配置...');
@@ -895,12 +948,35 @@
       }
     }
 
-    async function testNotifyConnection() {
-      appendLog('测试 Telegram 连接...');
-      const res = await fetch('/api/notify-test', { method: 'POST' });
+    async function testNotifyConnection(channel) {
+      const target = String(channel || '').trim().toLowerCase();
+      const channelLabel = target === 'telegram' ? 'Telegram' : (target === 'feishu' ? '飞书' : '通知渠道');
+      appendLog('测试' + channelLabel + '连接...');
+      const body = target ? { channel: target } : {};
+      const res = await fetch('/api/notify-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
       if (res.ok) {
         const data = await res.json();
-        const msg = `测试消息已发送：成功 ${data.success_count}/${data.total_chat_ids}`;
+        let msg = '';
+        if (data && data.channel && data.result) {
+          const result = data.result || {};
+          msg = `${channelLabel}测试成功: ${result.message || '已发送测试消息'}`;
+        } else {
+          const channels = (data && data.channels) || {};
+          const names = Object.keys(channels);
+          const detail = names.length
+            ? names.map((name) => {
+              const row = channels[name] || {};
+              const status = row.status || 'unknown';
+              const message = row.message || '';
+              return `${name}: ${status}${message ? ' - ' + message : ''}`;
+            }).join('\n')
+            : '无渠道详情';
+          msg = `测试消息已发送：成功 ${data.success_count}/${data.total_channels}\n${detail}`;
+        }
         appendLog(msg);
         alert(msg);
       } else {
