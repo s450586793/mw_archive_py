@@ -712,7 +712,7 @@ function getModelDetailUrl(m) {
 function updateVersionToggle() {
   if (!v2ToggleBtn) return;
   const label = v2ToggleBtn.querySelector(".toggle-label");
-  if (label) label.textContent = useV2 ? "V2" : "本地";
+  if (label) label.textContent = useV2 ? "在线" : "本地";
   v2ToggleBtn.classList.toggle("active", useV2);
 }
 
