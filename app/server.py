@@ -109,6 +109,14 @@ DEFAULT_CONFIG = {
     },
 }
 ARCHIVE_LOCK = threading.Lock()
+ARCHIVE_QUEUE_COND = threading.Condition()
+ARCHIVE_QUEUE_PENDING: List[str] = []
+ARCHIVE_QUEUE_TASKS = {}
+ARCHIVE_QUEUE_HISTORY: List[str] = []
+ARCHIVE_QUEUE_MAX_HISTORY = 200
+ARCHIVE_RUNNING_TASK_ID: Optional[str] = None
+ARCHIVE_WORKER_THREAD: Optional[threading.Thread] = None
+ARCHIVE_WORKER_STOP = threading.Event()
 DEFAULT_GALLERY_FLAGS = {
     "favorites": [],
     "printed": [],
@@ -135,6 +143,190 @@ MODEL_DOWNLOAD_ERROR_COOKIE_INVALID = "cookie_invalid"
 MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE = "cookie_challenge"
 MODEL_DOWNLOAD_ERROR_RATE_LIMIT = "rate_limit"
 MODEL_DOWNLOAD_ERROR_UNKNOWN = "unknown"
+
+
+def _build_archive_task_snapshot(task: dict) -> dict:
+    return {
+        "task_id": task.get("task_id"),
+        "url": task.get("url"),
+        "status": task.get("status"),
+        "queue_position": task.get("queue_position"),
+        "created_at": task.get("created_at"),
+        "started_at": task.get("started_at"),
+        "finished_at": task.get("finished_at"),
+        "message": task.get("message") or "",
+        "error": task.get("error") or "",
+        "result": task.get("result") if isinstance(task.get("result"), dict) else None,
+    }
+
+
+def _refresh_archive_queue_positions_locked():
+    for idx, task_id in enumerate(ARCHIVE_QUEUE_PENDING):
+        task = ARCHIVE_QUEUE_TASKS.get(task_id)
+        if isinstance(task, dict):
+            task["queue_position"] = idx + 1
+
+
+def _find_active_archive_task_locked(model_url: str) -> Optional[dict]:
+    normalized = str(model_url or "").strip()
+    if not normalized:
+        return None
+    if ARCHIVE_RUNNING_TASK_ID:
+        running_task = ARCHIVE_QUEUE_TASKS.get(ARCHIVE_RUNNING_TASK_ID)
+        if isinstance(running_task, dict):
+            if str(running_task.get("url") or "").strip() == normalized and str(running_task.get("status") or "") == "running":
+                return running_task
+    for task_id in ARCHIVE_QUEUE_PENDING:
+        task = ARCHIVE_QUEUE_TASKS.get(task_id)
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("url") or "").strip() == normalized and str(task.get("status") or "") == "queued":
+            return task
+    return None
+
+
+def _enqueue_archive_task(url: str) -> dict:
+    model_url = extract_makerworld_model_url(url)
+    if not model_url:
+        raise ValueError("链接格式无效，仅支持 makerworld 模型链接")
+    with ARCHIVE_QUEUE_COND:
+        existing = _find_active_archive_task_locked(model_url)
+        if isinstance(existing, dict):
+            return {
+                "task": _build_archive_task_snapshot(existing),
+                "deduplicated": True,
+            }
+        task_id = uuid.uuid4().hex
+        task = {
+            "task_id": task_id,
+            "url": model_url,
+            "status": "queued",
+            "queue_position": 0,
+            "created_at": now_iso(),
+            "started_at": "",
+            "finished_at": "",
+            "message": "已加入归档队列",
+            "error": "",
+            "result": None,
+        }
+        ARCHIVE_QUEUE_TASKS[task_id] = task
+        ARCHIVE_QUEUE_PENDING.append(task_id)
+        _refresh_archive_queue_positions_locked()
+        ARCHIVE_QUEUE_COND.notify_all()
+        return {
+            "task": _build_archive_task_snapshot(task),
+            "deduplicated": False,
+        }
+
+
+def _archive_queue_mark_finished(task_id: str):
+    if task_id in ARCHIVE_QUEUE_HISTORY:
+        ARCHIVE_QUEUE_HISTORY.remove(task_id)
+    ARCHIVE_QUEUE_HISTORY.append(task_id)
+    while len(ARCHIVE_QUEUE_HISTORY) > ARCHIVE_QUEUE_MAX_HISTORY:
+        old_id = ARCHIVE_QUEUE_HISTORY.pop(0)
+        old_task = ARCHIVE_QUEUE_TASKS.get(old_id)
+        if isinstance(old_task, dict) and str(old_task.get("status")) in {"success", "failed"}:
+            ARCHIVE_QUEUE_TASKS.pop(old_id, None)
+
+
+def _archive_queue_worker_loop():
+    global ARCHIVE_RUNNING_TASK_ID
+    while not ARCHIVE_WORKER_STOP.is_set():
+        task_id = ""
+        task = None
+        with ARCHIVE_QUEUE_COND:
+            while not ARCHIVE_WORKER_STOP.is_set() and not ARCHIVE_QUEUE_PENDING:
+                ARCHIVE_QUEUE_COND.wait(timeout=1.0)
+            if ARCHIVE_WORKER_STOP.is_set():
+                return
+            task_id = ARCHIVE_QUEUE_PENDING.pop(0)
+            _refresh_archive_queue_positions_locked()
+            task = ARCHIVE_QUEUE_TASKS.get(task_id)
+            if not isinstance(task, dict):
+                continue
+            ARCHIVE_RUNNING_TASK_ID = task_id
+            task["status"] = "running"
+            task["queue_position"] = 0
+            task["started_at"] = now_iso()
+            task["message"] = "归档执行中"
+            task["error"] = ""
+
+        try:
+            result = archive_model_with_lock(task.get("url") or "")
+            NOTIFIER.notify_success(result.get("notify_payload") or {})
+            if len(result.get("missing_3mf") or []) > 0:
+                notify_archive_missing_download_issue(result)
+            task["status"] = "success"
+            task["result"] = result
+            task["message"] = result.get("message") or "模型归档成功"
+        except Exception as e:
+            logger.exception("队列归档任务失败 task_id=%s", task_id)
+            title, detail = classify_archive_exception(e)
+            NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
+            task["status"] = "failed"
+            task["error"] = str(e)
+            task["message"] = f"归档失败: {e}"
+        finally:
+            task["finished_at"] = now_iso()
+            try:
+                reset_tmp_dir(TMP_DIR)
+            except Exception as e:
+                logger.warning("清理临时目录失败: %s", e)
+            with ARCHIVE_QUEUE_COND:
+                ARCHIVE_RUNNING_TASK_ID = None
+                _archive_queue_mark_finished(task_id)
+                ARCHIVE_QUEUE_COND.notify_all()
+
+
+def _ensure_archive_worker_running():
+    global ARCHIVE_WORKER_THREAD
+    if ARCHIVE_WORKER_THREAD and ARCHIVE_WORKER_THREAD.is_alive():
+        return
+    ARCHIVE_WORKER_STOP.clear()
+    ARCHIVE_WORKER_THREAD = threading.Thread(
+        target=_archive_queue_worker_loop,
+        name="archive-queue-worker",
+        daemon=True,
+    )
+    ARCHIVE_WORKER_THREAD.start()
+
+
+def _stop_archive_worker(timeout_seconds: float = 3.0):
+    ARCHIVE_WORKER_STOP.set()
+    with ARCHIVE_QUEUE_COND:
+        ARCHIVE_QUEUE_COND.notify_all()
+    thread = ARCHIVE_WORKER_THREAD
+    if thread and thread.is_alive():
+        thread.join(timeout=timeout_seconds)
+
+
+def get_archive_task(task_id: str) -> Optional[dict]:
+    with ARCHIVE_QUEUE_COND:
+        task = ARCHIVE_QUEUE_TASKS.get(str(task_id or "").strip())
+        if not isinstance(task, dict):
+            return None
+        return _build_archive_task_snapshot(task)
+
+
+def get_archive_queue_status() -> dict:
+    with ARCHIVE_QUEUE_COND:
+        running = ARCHIVE_QUEUE_TASKS.get(ARCHIVE_RUNNING_TASK_ID) if ARCHIVE_RUNNING_TASK_ID else None
+        queued = []
+        for task_id in ARCHIVE_QUEUE_PENDING:
+            task = ARCHIVE_QUEUE_TASKS.get(task_id)
+            if isinstance(task, dict):
+                queued.append(_build_archive_task_snapshot(task))
+        recent = []
+        for task_id in reversed(ARCHIVE_QUEUE_HISTORY[-20:]):
+            task = ARCHIVE_QUEUE_TASKS.get(task_id)
+            if isinstance(task, dict):
+                recent.append(_build_archive_task_snapshot(task))
+        return {
+            "running": _build_archive_task_snapshot(running) if isinstance(running, dict) else None,
+            "queued": queued,
+            "recent": recent,
+        }
 
 
 def load_version_values() -> dict:
@@ -2542,6 +2734,7 @@ TG_SERVICE.set_archive_handler(_tg_archive_callback)
 
 def sync_runtime_services():
     NOTIFIER.start()
+    _ensure_archive_worker_running()
     if LOCAL_BATCH_WATCHER.should_run():
         LOCAL_BATCH_WATCHER.start()
     else:
@@ -2555,6 +2748,7 @@ async def startup_events():
 
 @app.on_event("shutdown")
 async def shutdown_events():
+    _stop_archive_worker()
     LOCAL_BATCH_WATCHER.stop()
     NOTIFIER.stop()
 
@@ -2876,38 +3070,46 @@ async def api_archive(body: dict):
     if not url:
         raise HTTPException(400, "url 不能为空")
     try:
-        result = archive_model_with_lock(url)
-        NOTIFIER.notify_success(result.get("notify_payload") or {})
-        if len(result.get("missing_3mf") or []) > 0:
-            notify_archive_missing_download_issue(result)
-        return {"status": "ok", **result}
+        _ensure_archive_worker_running()
+        enqueue_result = _enqueue_archive_task(url)
+        task = enqueue_result.get("task") if isinstance(enqueue_result, dict) else {}
+        deduplicated = bool(enqueue_result.get("deduplicated")) if isinstance(enqueue_result, dict) else False
+        if not isinstance(task, dict):
+            raise RuntimeError("归档任务创建失败")
+        queue_position = int(task.get("queue_position") or 0)
+        status = str(task.get("status") or "")
+        msg = "归档任务已加入队列，等待执行"
+        if deduplicated:
+            if status == "running":
+                msg = "相同模型正在归档，已复用执行中任务"
+            else:
+                msg = "相同模型已在归档队列中，已复用排队任务"
+        elif queue_position == 1 and not ARCHIVE_RUNNING_TASK_ID:
+            msg = "归档任务已接收，正在准备执行"
+        return {
+            "status": "ok",
+            "message": msg,
+            "task": task,
+            "deduplicated": deduplicated,
+        }
     except ValueError as e:
-        err_text = str(e)
-        if "链接格式无效" not in err_text:
-            title, detail = classify_archive_exception(e)
-            NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
         raise HTTPException(400, str(e))
-    except requests.HTTPError as e:
-        resp = e.response
-        snippet = ""
-        if resp is not None:
-            snippet = (resp.text or "")[:300]
-            logger.error("归档失败 HTTP %s: %s", resp.status_code, snippet)
-        else:
-            logger.error("归档失败 HTTP: %s", e)
-        title, detail = classify_archive_exception(e)
-        NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
-        raise HTTPException(500, f"归档失败: {e} 片段: {snippet}")
     except Exception as e:
-        logger.exception("归档失败")
-        title, detail = classify_archive_exception(e)
-        NOTIFIER.notify_alert(build_alert_payload(title=title, summary=detail))
-        raise HTTPException(500, f"归档失败: {e}")
-    finally:
-        try:
-            reset_tmp_dir(TMP_DIR)
-        except Exception as e:
-            logger.warning("清理临时目录失败: %s", e)
+        logger.exception("提交归档任务失败")
+        raise HTTPException(500, f"提交归档任务失败: {e}")
+
+
+@app.get("/api/archive/tasks/{task_id}")
+async def api_archive_task(task_id: str):
+    task = get_archive_task(task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    return {"status": "ok", "task": task}
+
+
+@app.get("/api/archive/queue")
+async def api_archive_queue_status():
+    return {"status": "ok", **get_archive_queue_status()}
 
 
 @app.post("/api/archive/rebuild-pages")

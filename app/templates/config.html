@@ -931,6 +931,64 @@
       }
     }
 
+    async function pollArchiveTask(taskId) {
+      if (!taskId) return;
+      if (!window.__archivePollingTasks) window.__archivePollingTasks = new Set();
+      if (window.__archivePollingTasks.has(taskId)) {
+        appendLog('该归档任务正在跟踪中: ' + taskId);
+        return;
+      }
+      window.__archivePollingTasks.add(taskId);
+      let lastStatus = '';
+      let tick = 0;
+      try {
+        while (tick < 600) {
+          tick += 1;
+          try {
+            const res = await fetch('/api/archive/tasks/' + encodeURIComponent(taskId));
+            if (!res.ok) {
+              const err = await res.text();
+              appendLog('查询归档任务失败: ' + err);
+              return;
+            }
+            const data = await res.json();
+            const task = (data && data.task) || {};
+            const status = task.status || '';
+            const pos = Number(task.queue_position || 0);
+            if (status !== lastStatus) {
+              if (status === 'queued') {
+                appendLog('归档任务排队中，当前位置: ' + (pos > 0 ? pos : '-'));
+              } else if (status === 'running') {
+                appendLog('归档任务开始执行');
+              } else if (status === 'success') {
+                const result = task.result || {};
+                const msg = task.message || result.message || (result.action === 'updated' ? '模型已更新成功' : '模型归档成功');
+                appendLog(`${msg} -> ${result.work_dir || '-'}`);
+                alert(`${msg}\n目录: ${result.work_dir || '-'}`);
+                loadMissing();
+                return;
+              } else if (status === 'failed') {
+                const errText = task.error || task.message || '未知错误';
+                appendLog('归档失败: ' + errText);
+                alert('归档失败: ' + errText);
+                return;
+              }
+              lastStatus = status;
+            } else if (status === 'queued' && tick % 10 === 0) {
+              appendLog('归档任务仍在排队，当前位置: ' + (pos > 0 ? pos : '-'));
+            }
+          } catch (e) {
+            appendLog('查询归档任务异常: ' + (e && e.message ? e.message : e));
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        appendLog('归档任务查询超时，请稍后在日志中查看执行结果');
+      } finally {
+        window.__archivePollingTasks.delete(taskId);
+      }
+    }
+
     async function startArchive() {
       const url = document.getElementById('modelUrl').value.trim();
       if (!url) {
@@ -945,10 +1003,20 @@
       });
       if (res.ok) {
         const data = await res.json();
-        const msg = data.message || (data.action === 'updated' ? '模型已更新成功' : '模型归档成功');
-        appendLog(`${msg} -> ${data.work_dir}`);
-        alert(`${msg}\n目录: ${data.work_dir}`);
-        loadMissing();
+        const task = (data && data.task) || {};
+        const queuePos = Number(task.queue_position || 0);
+        appendLog((data && data.message) || '归档任务已提交');
+        if (data && data.deduplicated) {
+          appendLog('检测到同一模型重复提交，已复用任务: ' + (task.task_id || '-'));
+        }
+        if (queuePos > 0) {
+          appendLog('当前队列位置: ' + queuePos);
+        }
+        if (task.task_id) {
+          pollArchiveTask(task.task_id);
+        } else {
+          appendLog('未返回任务ID，请稍后手动检查归档结果');
+        }
       } else {
         const err = await res.text();
         appendLog('归档失败: ' + err);
