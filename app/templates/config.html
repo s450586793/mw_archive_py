@@ -109,21 +109,35 @@
             <i class="fas fa-save"></i> 保存 Cookie
           </button>
         </div>
+
+        <div class="form-section">
+          <h3>真实路径配置</h3>
+          <p class="description">用于详情页“模型路径”按钮复制本地真实目录）</p>
+          <div class="form-group">
+            <label class="form-label">本地真实目录地址</label>
+            <input type="text" id="folderOpenLocalRoot" class="form-input" placeholder="D:\\archive\\models 或 /Volumes/models">
+            <div class="text-muted text-small mt-sm">复制路径时会自动拼接模型目录名，例如：本地真实目录 + \\MW_xxx</div>
+          </div>
+          <button class="btn btn-primary" onclick="saveFolderOpenConfig()">
+            <i class="fas fa-save"></i> 保存路径配置
+          </button>
+        </div>
       </div>
 
       <!-- Tab Content: Archive -->
       <div class="tab-content" id="tab-archive">
         <div class="form-section">
           <h3>模型归档</h3>
-          <p class="description">输入 MakerWorld 模型链接,一键归档到本地</p>
+          <p class="description">输入 MakerWorld 模型链接，一键归档到本地</p>
 
           <div class="info-box">
             <i class="fas fa-info-circle"></i>
             <div class="info-box-content">
               <div class="info-box-title">使用说明</div>
               <div class="info-box-text">
-                支持归档 MakerWorld 模型的所有内容,包括图片、3MF 文件、描述等。
+                支持归档 MakerWorld 模型的所有内容，包括图片、3MF 文件、描述等。
                 归档完成后可在模型库中查看。
+                归档过程中可能会造成系统卡顿，请耐心等待归档完成再使用；
               </div>
             </div>
           </div>
@@ -144,24 +158,23 @@
       <!-- Tab Content: Maintenance -->
       <div class="tab-content" id="tab-maintenance">
         <div class="form-section">
-          <h3>归档更新</h3>
+          <h3>归档页面更新</h3>
 
           <div class="info-box">
             <i class="fas fa-wrench"></i>
             <div class="info-box-content">
               <div class="info-box-title">功能说明</div>
               <div class="info-box-text">
-                历史归档模型生成页面更新到最新版本，同时修复问题（不会删除模型文件）<br>
+                历史归档模型生成页面更新到最新版本，同时修复问题<br>
                 ❗️可能存在风险，建议先备份已归档模型目录后再执行。
               </div>
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">历史归档维护</label>
             <div class="archive-input-group">
               <button class="btn btn-secondary" onclick="rebuildArchivedPages()">
-                <i class="fas fa-sync-alt"></i> 一键更新历史归档
+                <i class="fas fa-sync-alt"></i> 更新历史归档
               </button>
               <div class="text-muted text-small" style="display:flex; align-items:center;">
                 扫描并按最新模板重建页面。
@@ -171,14 +184,14 @@
         </div>
 
         <div class="form-section">
-          <h3>本地批量导入监控</h3>
+          <h3>批量导入监控</h3>
 
           <div class="info-box">
             <i class="fas fa-folder-open"></i>
             <div class="info-box-content">
               <div class="info-box-title">功能说明</div>
               <div class="info-box-text">
-                仅扫描并导入本地 `3MF` 到 `LocalModel_*`，不会与在线归档 `MW_*` 混合。<br>
+                仅扫描并导入本地 `3MF` 到 `LocalModel_*`，不与在线归档 `MW_*` 混合。<br>
                 默认监控目录为 `./watch`，适合 Docker 映射到容器外部目录。导入成功后源文件会移动到 `_imported` 子目录，失败文件会移动到 `_failed` 子目录，后续扫描会自动忽略这两个目录。
               </div>
             </div>
@@ -204,13 +217,13 @@
               <input type="number" id="localBatchInterval" class="form-input" min="30" step="30" value="300">
             </div>
             <div class="form-group">
-              <label class="form-label">解析并发</label>
+              <label class="form-label">并发数</label>
               <input type="number" id="localBatchWorkers" class="form-input" min="1" max="4" step="1" value="2">
             </div>
           </div>
 
           <div class="tg-toggle-row">
-            <span class="tg-toggle-title">导入完成后推送汇总</span>
+            <span class="tg-toggle-title">导入完成通知</span>
             <label class="tg-switch" for="localBatchNotify">
               <input type="checkbox" id="localBatchNotify">
               <span class="tg-slider"></span>
@@ -224,10 +237,10 @@
 
           <div class="table-actions mt-lg">
             <button class="btn btn-primary" type="button" onclick="saveLocalBatchConfig()">
-              <i class="fas fa-save"></i> 保存监控配置
+              <i class="fas fa-save"></i> 保存配置
             </button>
             <button class="btn btn-secondary" type="button" onclick="runLocalBatchImport()">
-              <i class="fas fa-play"></i> 立即扫描并导入
+              <i class="fas fa-play"></i> 立即扫描导入
             </button>
           </div>
         </div>
@@ -242,6 +255,7 @@
               <div class="info-box-text">
                 扫描固定目录下的 `3MF` 文件，按模型自动整理到“整理完成 / 重复文件 / 整理失败 / 整理报告”目录。<br>
                 有 `DesignModelId` 的模型目录会命名为 `MW_作者名_模型名`，没有 `DesignModelId` 的会命名为 `Others_作者名_模型名`。
+                仅整理本地文件，和模型库无关
               </div>
             </div>
           </div>
@@ -267,7 +281,7 @@
 
           <div class="table-actions mt-lg">
             <button class="btn btn-primary" type="button" onclick="saveLocal3mfOrganizerConfig()">
-              <i class="fas fa-save"></i> 保存整理配置
+              <i class="fas fa-save"></i> 保存配置
             </button>
             <button class="btn btn-secondary" type="button" onclick="runLocal3mfOrganizer()">
               <i class="fas fa-play"></i> 开始整理
@@ -306,7 +320,16 @@
       <!-- Tab Content: Notify -->
       <div class="tab-content" id="tab-notify">
         <div class="form-section">
-          <h3>通知配置（Telegram）</h3>
+          <h3>公共配置</h3>
+          <div class="form-group">
+            <label class="form-label">项目在线地址</label>
+            <input type="text" id="notifyWebBaseUrl" class="form-input" placeholder="http://127.0.0.1:8000">
+            <div class="text-muted text-small mt-sm">用于通知消息中生成在线访问地址（/v2/files/...）。</div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Telegram</h3>
           <div class="tg-toggle-row">
             <span class="tg-toggle-title">推送开关</span>
             <label class="tg-switch" for="tgEnablePush">
@@ -324,18 +347,51 @@
             <input type="text" id="tgChatId" class="form-input" placeholder="-1001234567890, 496548857">
             <div class="text-muted text-small mt-sm">多个 Chat ID 用英文逗号分隔。</div>
           </div>
+
+          <div class="table-actions">
+            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection('telegram')">
+              <i class="fas fa-satellite-dish"></i> 测试 Telegram
+            </button>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>飞书</h3>
+          <div class="tg-toggle-row">
+            <span class="tg-toggle-title">推送开关</span>
+            <label class="tg-switch" for="fsEnablePush">
+              <input type="checkbox" id="fsEnablePush">
+              <span class="tg-slider"></span>
+            </label>
+          </div>
+
           <div class="form-group">
-            <label class="form-label">项目在线地址前缀</label>
-            <input type="text" id="tgWebBaseUrl" class="form-input" placeholder="http://127.0.0.1:8000">
-            <div class="text-muted text-small mt-sm">用于 Telegram 成功消息中生成本地在线访问地址（/v2/files/...）</div>
+            <label class="form-label">飞书机器人 Webhook</label>
+            <input type="text" id="fsWebhookUrl" class="form-input" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+            <div class="text-muted text-small mt-sm">仅配置 Webhook 时可发送文本通知。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">企业应用 App ID（可选）</label>
+            <input type="text" id="fsAppId" class="form-input" placeholder="cli_xxxxx">
+            <div class="text-muted text-small mt-sm">配置 App ID + App Secret 后自动启用图文消息。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">企业应用 App Secret（可选）</label>
+            <input type="text" id="fsAppSecret" class="form-input" placeholder="xxxxxxxx">
+            <div class="text-muted text-small mt-sm">用于获取 tenant_access_token；缺失时不上传图片。</div>
           </div>
 
           <div class="table-actions">
-            <button class="btn btn-primary" type="button" onclick="saveNotifyConfig()">
-              <i class="fas fa-save"></i> 保存通知配置
+            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection('feishu')">
+              <i class="fas fa-satellite-dish"></i> 测试飞书
             </button>
-            <button class="btn btn-secondary" type="button" onclick="testNotifyConnection()">
-              <i class="fas fa-satellite-dish"></i> 测试连接
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="table-actions">
+            <button class="btn btn-primary" type="button" onclick="saveNotifyConfig()">
+              <i class="fas fa-save"></i> 保存设置
             </button>
           </div>
         </div>
@@ -692,9 +748,34 @@
       const data = await res.json();
       document.getElementById('cookieTime').textContent = 'Cookie 更新时间: ' + formatDateTimeText(data.cookie_updated_at);
       renderCookieGroups((data && data.cookie_store) || {});
+      const folderCfg = (data && data.folder_open) || {};
+      document.getElementById('folderOpenLocalRoot').value = folderCfg.local_real_root_path || '';
       await loadNotifyConfig();
       await loadLocalBatchConfig();
       await loadLocal3mfOrganizerConfig();
+    }
+
+    async function saveFolderOpenConfig() {
+      const localRoot = (document.getElementById('folderOpenLocalRoot').value || '').trim();
+      appendLog('保存路径兼容配置...');
+      const res = await fetch('/api/folder-open/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder_open: {
+            enabled: true,
+            local_real_root_path: localRoot
+          }
+        })
+      });
+      if (res.ok) {
+        appendLog('路径兼容配置已保存');
+        alert('路径兼容配置已保存');
+      } else {
+        const err = await res.text();
+        appendLog('路径兼容配置保存失败: ' + err);
+        alert('路径兼容配置保存失败');
+      }
     }
 
     async function loadNotifyConfig() {
@@ -702,19 +783,30 @@
       if (!res.ok) return;
       const data = await res.json();
       const tg = (data && data.telegram) || {};
+      const fs = (data && data.feishu) || {};
+      document.getElementById('notifyWebBaseUrl').value = (data && data.web_base_url) || 'http://127.0.0.1:8000';
       document.getElementById('tgEnablePush').checked = !!tg.enable_push;
       document.getElementById('tgBotToken').value = tg.bot_token || '';
       document.getElementById('tgChatId').value = tg.chat_id || '';
-      document.getElementById('tgWebBaseUrl').value = tg.web_base_url || 'http://127.0.0.1:8000';
+      document.getElementById('fsEnablePush').checked = !!fs.enable_push;
+      document.getElementById('fsWebhookUrl').value = fs.webhook_url || '';
+      document.getElementById('fsAppId').value = fs.app_id || '';
+      document.getElementById('fsAppSecret').value = fs.app_secret || '';
     }
 
     async function saveNotifyConfig() {
       const payload = {
+        web_base_url: (document.getElementById('notifyWebBaseUrl').value || '').trim(),
         telegram: {
           enable_push: !!document.getElementById('tgEnablePush').checked,
           bot_token: (document.getElementById('tgBotToken').value || '').trim(),
           chat_id: (document.getElementById('tgChatId').value || '').trim(),
-          web_base_url: (document.getElementById('tgWebBaseUrl').value || '').trim(),
+        },
+        feishu: {
+          enable_push: !!document.getElementById('fsEnablePush').checked,
+          webhook_url: (document.getElementById('fsWebhookUrl').value || '').trim(),
+          app_id: (document.getElementById('fsAppId').value || '').trim(),
+          app_secret: (document.getElementById('fsAppSecret').value || '').trim(),
         }
       };
       appendLog('保存通知配置...');
@@ -895,12 +987,35 @@
       }
     }
 
-    async function testNotifyConnection() {
-      appendLog('测试 Telegram 连接...');
-      const res = await fetch('/api/notify-test', { method: 'POST' });
+    async function testNotifyConnection(channel) {
+      const target = String(channel || '').trim().toLowerCase();
+      const channelLabel = target === 'telegram' ? 'Telegram' : (target === 'feishu' ? '飞书' : '通知渠道');
+      appendLog('测试' + channelLabel + '连接...');
+      const body = target ? { channel: target } : {};
+      const res = await fetch('/api/notify-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
       if (res.ok) {
         const data = await res.json();
-        const msg = `测试消息已发送：成功 ${data.success_count}/${data.total_chat_ids}`;
+        let msg = '';
+        if (data && data.channel && data.result) {
+          const result = data.result || {};
+          msg = `${channelLabel}测试成功: ${result.message || '已发送测试消息'}`;
+        } else {
+          const channels = (data && data.channels) || {};
+          const names = Object.keys(channels);
+          const detail = names.length
+            ? names.map((name) => {
+              const row = channels[name] || {};
+              const status = row.status || 'unknown';
+              const message = row.message || '';
+              return `${name}: ${status}${message ? ' - ' + message : ''}`;
+            }).join('\n')
+            : '无渠道详情';
+          msg = `测试消息已发送：成功 ${data.success_count}/${data.total_channels}\n${detail}`;
+        }
         appendLog(msg);
         alert(msg);
       } else {
@@ -931,6 +1046,64 @@
       }
     }
 
+    async function pollArchiveTask(taskId) {
+      if (!taskId) return;
+      if (!window.__archivePollingTasks) window.__archivePollingTasks = new Set();
+      if (window.__archivePollingTasks.has(taskId)) {
+        appendLog('该归档任务正在跟踪中: ' + taskId);
+        return;
+      }
+      window.__archivePollingTasks.add(taskId);
+      let lastStatus = '';
+      let tick = 0;
+      try {
+        while (tick < 600) {
+          tick += 1;
+          try {
+            const res = await fetch('/api/archive/tasks/' + encodeURIComponent(taskId));
+            if (!res.ok) {
+              const err = await res.text();
+              appendLog('查询归档任务失败: ' + err);
+              return;
+            }
+            const data = await res.json();
+            const task = (data && data.task) || {};
+            const status = task.status || '';
+            const pos = Number(task.queue_position || 0);
+            if (status !== lastStatus) {
+              if (status === 'queued') {
+                appendLog('归档任务排队中，当前位置: ' + (pos > 0 ? pos : '-'));
+              } else if (status === 'running') {
+                appendLog('归档任务开始执行');
+              } else if (status === 'success') {
+                const result = task.result || {};
+                const msg = task.message || result.message || (result.action === 'updated' ? '模型已更新成功' : '模型归档成功');
+                appendLog(`${msg} -> ${result.work_dir || '-'}`);
+                alert(`${msg}\n目录: ${result.work_dir || '-'}`);
+                loadMissing();
+                return;
+              } else if (status === 'failed') {
+                const errText = task.error || task.message || '未知错误';
+                appendLog('归档失败: ' + errText);
+                alert('归档失败: ' + errText);
+                return;
+              }
+              lastStatus = status;
+            } else if (status === 'queued' && tick % 10 === 0) {
+              appendLog('归档任务仍在排队，当前位置: ' + (pos > 0 ? pos : '-'));
+            }
+          } catch (e) {
+            appendLog('查询归档任务异常: ' + (e && e.message ? e.message : e));
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        appendLog('归档任务查询超时，请稍后在日志中查看执行结果');
+      } finally {
+        window.__archivePollingTasks.delete(taskId);
+      }
+    }
+
     async function startArchive() {
       const url = document.getElementById('modelUrl').value.trim();
       if (!url) {
@@ -945,10 +1118,20 @@
       });
       if (res.ok) {
         const data = await res.json();
-        const msg = data.message || (data.action === 'updated' ? '模型已更新成功' : '模型归档成功');
-        appendLog(`${msg} -> ${data.work_dir}`);
-        alert(`${msg}\n目录: ${data.work_dir}`);
-        loadMissing();
+        const task = (data && data.task) || {};
+        const queuePos = Number(task.queue_position || 0);
+        appendLog((data && data.message) || '归档任务已提交');
+        if (data && data.deduplicated) {
+          appendLog('检测到同一模型重复提交，已复用任务: ' + (task.task_id || '-'));
+        }
+        if (queuePos > 0) {
+          appendLog('当前队列位置: ' + queuePos);
+        }
+        if (task.task_id) {
+          pollArchiveTask(task.task_id);
+        } else {
+          appendLog('未返回任务ID，请稍后手动检查归档结果');
+        }
       } else {
         const err = await res.text();
         appendLog('归档失败: ' + err);

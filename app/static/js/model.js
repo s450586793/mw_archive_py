@@ -275,6 +275,44 @@
         return true;
     }
 
+    function joinLocalPath(root, modelDir) {
+        var base = String(root || '').trim();
+        var name = String(modelDir || '').trim();
+        if (!base || !name) return '';
+        var hasBackslash = base.indexOf('\\') >= 0;
+        var sep = hasBackslash ? '\\' : '/';
+        base = base.replace(/[\\/]+$/, '');
+        return base + sep + name;
+    }
+
+    function copyTextToClipboard(text) {
+        var value = String(text || '');
+        if (!value) return Promise.reject(new Error('空文本'));
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(value);
+        }
+        return new Promise(function (resolve, reject) {
+            try {
+                var ta = document.createElement('textarea');
+                ta.value = value;
+                ta.setAttribute('readonly', 'readonly');
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                var ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                if (!ok) {
+                    reject(new Error('浏览器拒绝复制'));
+                    return;
+                }
+                resolve();
+            } catch (e) {
+                reject(e);
+            }
+        });
+    }
+
     function getOfflineFileList(kind) {
         try {
             var meta = window.__OFFLINE_META__ || {};
@@ -1366,6 +1404,49 @@
         });
     }
 
+    function initModelPathCopy(meta) {
+        var copyBtn = document.getElementById('modelPathCopyBtn');
+        var msgEl = document.getElementById('modelEditMsg');
+        if (!copyBtn) return;
+
+        function setMsg(text, isError) {
+            if (!msgEl) return;
+            msgEl.textContent = text || '';
+            if (isError) msgEl.classList.add('error');
+            else msgEl.classList.remove('error');
+        }
+
+        if (!canUseBackendApi()) {
+            copyBtn.style.display = 'none';
+            return;
+        }
+
+        var folderOpen = (meta && typeof meta === 'object' && meta.folder_open && typeof meta.folder_open === 'object')
+            ? meta.folder_open
+            : {};
+        var enabled = folderOpen.enabled !== false;
+        var localRoot = String(folderOpen.local_real_root_path || '').trim();
+        if (!enabled || !localRoot) {
+            copyBtn.style.display = 'none';
+            return;
+        }
+
+        copyBtn.style.display = '';
+        copyBtn.addEventListener('click', async function () {
+            var targetPath = joinLocalPath(localRoot, MODEL_DIR);
+            if (!targetPath) {
+                setMsg('路径配置无效，请先在配置页填写本地真实目录地址', true);
+                return;
+            }
+            try {
+                await copyTextToClipboard(targetPath);
+                setMsg('模型路径已复制到剪贴板');
+            } catch (_) {
+                setMsg('复制失败，请检查浏览器剪贴板权限', true);
+            }
+        });
+    }
+
     // ============ 在线追加打印配置 ============
 
     function initInstanceImport() {
@@ -1651,6 +1732,7 @@
             initAttachments();
             initPrinted();
             initModelEditor();
+            initModelPathCopy(meta);
             initInstanceImport();
             initBambuOpenGuard();
 
