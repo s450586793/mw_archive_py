@@ -97,6 +97,144 @@
         return name;
     }
 
+    function escapeHtmlText(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(str) {
+        return escapeHtmlText(str);
+    }
+
+    function parseVideoEmbedInfo(rawUrl) {
+        var input = String(rawUrl || '').trim();
+        if (!input) return null;
+
+        var urlObj;
+        try {
+            urlObj = new URL(input);
+        } catch (_) {
+            return null;
+        }
+
+        var host = String(urlObj.hostname || '').toLowerCase();
+        var pathName = String(urlObj.pathname || '');
+        var match;
+
+        if (host.indexOf('bilibili.com') >= 0 || host === 'b23.tv') {
+            if (host.indexOf('player.bilibili.com') >= 0) {
+                var directBvid = urlObj.searchParams.get('bvid');
+                if (directBvid) {
+                    return {
+                        platform: 'bilibili',
+                        sourceUrl: input,
+                        embedUrl: 'https://player.bilibili.com/player.html?bvid=' + encodeURIComponent(directBvid) + '&autoplay=0&poster=1',
+                        label: 'Bilibili'
+                    };
+                }
+            }
+            match = pathName.match(/\/video\/(BV[0-9A-Za-z]+)/i) || pathName.match(/\/(BV[0-9A-Za-z]+)/i);
+            if (match && match[1]) {
+                return {
+                    platform: 'bilibili',
+                    sourceUrl: input,
+                    embedUrl: 'https://player.bilibili.com/player.html?bvid=' + encodeURIComponent(match[1]) + '&autoplay=0&poster=1',
+                    label: 'Bilibili'
+                };
+            }
+            return {
+                platform: 'bilibili',
+                sourceUrl: input,
+                embedUrl: '',
+                label: 'Bilibili'
+            };
+        }
+
+        if (host === 'youtu.be' || host.indexOf('youtube.com') >= 0) {
+            var videoId = '';
+            if (host === 'youtu.be') {
+                match = pathName.match(/^\/([^/?#]+)/);
+                videoId = match && match[1] ? match[1] : '';
+            } else if (pathName.indexOf('/watch') === 0) {
+                videoId = urlObj.searchParams.get('v') || '';
+            } else if (pathName.indexOf('/shorts/') === 0) {
+                match = pathName.match(/^\/shorts\/([^/?#]+)/);
+                videoId = match && match[1] ? match[1] : '';
+            } else if (pathName.indexOf('/embed/') === 0) {
+                match = pathName.match(/^\/embed\/([^/?#]+)/);
+                videoId = match && match[1] ? match[1] : '';
+            }
+            if (videoId) {
+                return {
+                    platform: 'youtube',
+                    sourceUrl: input,
+                    embedUrl: 'https://www.youtube.com/embed/' + encodeURIComponent(videoId),
+                    label: 'YouTube'
+                };
+            }
+            return {
+                platform: 'youtube',
+                sourceUrl: input,
+                embedUrl: '',
+                label: 'YouTube'
+            };
+        }
+
+        return {
+            platform: 'external',
+            sourceUrl: input,
+            embedUrl: '',
+            label: 'External video'
+        };
+    }
+
+    function buildSummaryVideoHtml(rawUrl) {
+        var info = parseVideoEmbedInfo(rawUrl);
+        if (!info || !info.sourceUrl) return '';
+
+        var safeSourceUrl = escapeAttr(info.sourceUrl);
+        var safeLabel = escapeHtmlText(info.label || 'Video');
+
+        if (!info.embedUrl) {
+            return '<div class="summary-video summary-video__fallback">' +
+                '<div class="summary-video__meta">Embedded playback is not available for this video link.</div>' +
+                '<a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">Open original video</a>' +
+                '</div>';
+        }
+
+        return '<div class="summary-video">' +
+            '<div class="summary-video__inner">' +
+            '<iframe class="summary-video__frame" src="' + escapeAttr(info.embedUrl) + '" title="' + safeLabel + ' video" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>' +
+            '</div>' +
+            '<div class="summary-video__meta"><a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">Open original video in a new tab</a></div>' +
+            '</div>';
+    }
+
+    function transformSummaryHtml(html, resolveImageSrc) {
+        var raw = String(html || '');
+        raw = raw.replace(/<div[^>]*class=["'][^"']*translated-text[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+        raw = raw.replace(/<figure[^>]*class=["'][^"']*media[^"']*["'][^>]*>\s*<oembed[^>]*url=["']([^"']+)["'][^>]*><\/oembed>\s*<\/figure>/gi, function (_match, url) {
+            return buildSummaryVideoHtml(url) || _match;
+        });
+        raw = raw.replace(/<oembed[^>]*url=["']([^"']+)["'][^>]*><\/oembed>/gi, function (_match, url) {
+            return buildSummaryVideoHtml(url) || _match;
+        });
+        raw = raw.replace(/<div[^>]*data-oembed-url=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>/gi, function (_match, url) {
+            return buildSummaryVideoHtml(url) || _match;
+        });
+        raw = raw.replace(/src=(["'])(?!https?:\/\/|\/)(.*?)\1/gi, function (_match, quote, src) {
+            var fileName = toName(src);
+            if (!fileName) return _match;
+            var finalUrl = typeof resolveImageSrc === 'function' ? resolveImageSrc(fileName) : src;
+            return 'src=' + quote + finalUrl + quote;
+        });
+        return raw;
+    }
+
     // ============ 数据标准化 ============
 
     function normalizeStats(meta) {
@@ -477,11 +615,8 @@
     function renderSummary(meta) {
         var s = meta.summary || {};
         var html = s.html || s.raw || '';
-        // 移除翻译文本
-        html = html.replace(/<div[^>]*class="[^"]*translated-text[^"]*"[^>]*>.*?<\/div>/gis, '');
-        // 修正 summary 中的图片路径 — 如果 src 是相对路径则映射到 /files/{modelDir}/images/
-        html = html.replace(/src="(?!https?:\/\/|\/)(.*?)"/g, function (match, p1) {
-            return 'src="' + fileUrl(MODEL_DIR, 'images/' + toName(p1)) + '"';
+        html = transformSummaryHtml(html, function (fileName) {
+            return fileUrl(MODEL_DIR, 'images/' + fileName);
         });
         document.getElementById('summaryContent').innerHTML = html;
     }
@@ -1753,6 +1888,17 @@
         var el = document.getElementById('errorState');
         el.textContent = msg;
         el.classList.remove('hidden');
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            parseVideoEmbedInfo: parseVideoEmbedInfo,
+            transformSummaryHtml: transformSummaryHtml,
+        };
+    }
+
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+        return;
     }
 
     // 启动
