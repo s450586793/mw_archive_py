@@ -46,6 +46,7 @@ from batch_import_watcher import LocalBatchImportWatcher
 from gallery_index import (
     GALLERY_INDEX_PATH,
     get_gallery_items,
+    load_gallery_index_payload,
     rebuild_gallery_index,
     remove_gallery_index_entries,
     upsert_gallery_index_entry,
@@ -2601,6 +2602,37 @@ def scan_gallery(cfg) -> List[dict]:
     return get_gallery_items(cfg["download_dir"], index_path=GALLERY_INDEX_PATH)
 
 
+def get_model_archive_status_by_id(model_id: str) -> dict:
+    target_id = str(model_id or "").strip()
+    if not target_id:
+        raise ValueError("model_id 不能为空")
+    payload = load_gallery_index_payload(index_path=GALLERY_INDEX_PATH)
+    items = payload.get("items") if isinstance(payload, dict) and isinstance(payload.get("items"), list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if not item_id or item_id != target_id:
+            continue
+        archived_at = str(item.get("collectedAt") or "").strip()
+        return {
+            "exists": True,
+            "model_id": target_id,
+            "archived_at": archived_at,
+            "model_dir": str(item.get("dir") or "").strip(),
+            "title": str(item.get("title") or "").strip(),
+            "source": str(item.get("source") or "").strip(),
+        }
+    return {
+        "exists": False,
+        "model_id": target_id,
+        "archived_at": "",
+        "model_dir": "",
+        "title": "",
+        "source": "",
+    }
+
+
 def sync_gallery_index_for_model(model_dir: Path):
     try:
         upsert_gallery_index_entry(CFG["download_dir"], model_dir, index_path=GALLERY_INDEX_PATH)
@@ -3228,6 +3260,17 @@ async def api_archive_task(task_id: str):
 @app.get("/api/archive/queue")
 async def api_archive_queue_status():
     return {"status": "ok", **get_archive_queue_status()}
+
+
+@app.get("/api/archive/status/{model_id}")
+async def api_archive_status(model_id: str):
+    try:
+        return {"status": "ok", **get_model_archive_status_by_id(model_id)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("查询模型归档状态失败: model_id=%s", model_id)
+        raise HTTPException(500, f"查询模型归档状态失败: {e}")
 
 
 @app.post("/api/archive/rebuild-pages")

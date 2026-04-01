@@ -91,6 +91,12 @@ h1 {
   width: 100%;
 }
 
+.btn.toggle {
+  flex: 0 0 84px;
+  padding: 8px 6px;
+  font-size: 12px;
+}
+
 .btn.home:hover {
   background: #00a4bd;
 }
