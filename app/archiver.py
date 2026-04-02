@@ -631,6 +631,77 @@ def _normalize_design_pictures(design: dict) -> List[dict]:
     return []
 
 
+def _attachment_name_from_url(url: str, fallback: str) -> str:
+    parsed = urlparse(url or "")
+    raw_name = Path(parsed.path or "").name
+    safe_name = sanitize_filename(raw_name)
+    if safe_name:
+        return safe_name
+    return sanitize_filename(fallback) or fallback
+
+
+def _dedupe_attachment_local_name(preferred: str, used: set[str]) -> str:
+    candidate = sanitize_filename(preferred or "attachment") or "attachment"
+    stem = Path(candidate).stem or "attachment"
+    suffix = Path(candidate).suffix
+    if candidate not in used:
+        used.add(candidate)
+        return candidate
+    idx = 1
+    while True:
+        alt = sanitize_filename(f"{stem}_{idx}{suffix}") or f"attachment_{idx}{suffix}"
+        if alt not in used:
+            used.add(alt)
+            return alt
+        idx += 1
+
+
+def extract_design_attachments(design: dict) -> List[dict]:
+    ext = design.get("designExtension") or {}
+    if not isinstance(ext, dict):
+        return []
+
+    category_map = {
+        "design_guide": "guide",
+        "design_bom": "bom",
+        "design_other": "other",
+    }
+    attachments = []
+    seen_urls = set()
+    used_local_names = set()
+
+    for key, category in category_map.items():
+        items = ext.get(key)
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items, start=1):
+            raw_name = ""
+            url = ""
+            if isinstance(item, dict):
+                raw_name = str(item.get("name") or item.get("fileName") or item.get("filename") or item.get("title") or "").strip()
+                url = str(item.get("url") or item.get("downloadUrl") or item.get("download_url") or item.get("src") or "").strip()
+            elif isinstance(item, str):
+                url = item.strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            fallback_name = f"{category}_{idx}.{pick_ext_from_url(url, 'bin')}"
+            source_name = sanitize_filename(Path(raw_name).name) if raw_name else ""
+            display_name = source_name or _attachment_name_from_url(url, fallback_name)
+            local_name = _dedupe_attachment_local_name(display_name, used_local_names)
+
+            attachments.append({
+                "category": category,
+                "name": display_name,
+                "url": url,
+                "source": "page",
+                "localName": local_name,
+                "relPath": f"file/{local_name}",
+            })
+    return attachments
+
+
 def collect_design_images(design: dict, session: requests.Session, out_dir: Path, base_name: str):
     pics = _normalize_design_pictures(design)
     if not pics:
@@ -928,7 +999,7 @@ def extract_instances(design: dict) -> List[dict]:
     return []
 
 
-def build_meta(design: dict, summary: dict, design_images: List[dict], cover_meta: Optional[dict], instances: List[dict], author: dict, base_name: str):
+def build_meta(design: dict, summary: dict, design_images: List[dict], cover_meta: Optional[dict], instances: List[dict], author: dict, base_name: str, attachments: Optional[List[dict]] = None):
     collect_ts = int(datetime.now().timestamp())
     update_time = datetime.now().isoformat()
     counts = design.get("counts") or {}
@@ -994,9 +1065,10 @@ def build_meta(design: dict, summary: dict, design_images: List[dict], cover_met
             "text": summary.get("text", ""),
         },
         "instances": instances,
+        "attachments": attachments or [],
         "collectDate": collect_ts,
         "offlineFiles": {
-            "attachments": [],
+            "attachments": [str(item.get("localName") or "") for item in (attachments or []) if str(item.get("localName") or "").strip()],
             "printed": [],
         },
         "update_time": update_time,
@@ -1760,8 +1832,10 @@ def rebuild_once(meta_path: Path):
     # 2. 准备子目录
     images_dir = work_dir / "images"
     instances_dir = work_dir / "instances"
+    files_dir = work_dir / "file"
     ensure_dir(images_dir)
     ensure_dir(instances_dir)
+    ensure_dir(files_dir)
 
     # 3. 移动 screenshot
     screenshot_file = None
@@ -1835,7 +1909,47 @@ def rebuild_once(meta_path: Path):
             "file": dest.name,
         })
 
-    # 若实例文件名发生唯一化调整，写回 meta.json，保证元数据与磁盘一致
+    attachments = meta.get("attachments") or []
+    attachment_files = []
+    if isinstance(attachments, list):
+        used_names = set()
+        for idx, att in enumerate(attachments, start=1):
+            if not isinstance(att, dict):
+                continue
+            url = str(att.get("url") or "").strip()
+            if not url:
+                continue
+            preferred = str(att.get("localName") or att.get("name") or "").strip()
+            if not preferred:
+                preferred = _attachment_name_from_url(url, f"attachment_{idx}.{pick_ext_from_url(url, 'bin')}")
+            local_name = _dedupe_attachment_local_name(preferred, used_names)
+            if str(att.get("localName") or "") != local_name:
+                att["localName"] = local_name
+                meta_changed = True
+            rel_path = f"file/{local_name}"
+            if str(att.get("relPath") or "") != rel_path:
+                att["relPath"] = rel_path
+                meta_changed = True
+            dest = files_dir / local_name
+            download_file(REBUILD_SESSION, url, dest)
+            attachment_files.append(local_name)
+
+    offline = meta.get("offlineFiles")
+    if not isinstance(offline, dict):
+        offline = {}
+        meta["offlineFiles"] = offline
+    if offline.get("attachments") != attachment_files:
+        offline["attachments"] = attachment_files
+        meta_changed = True
+
+    if attachment_files:
+        index_payload = {
+            "files": attachment_files,
+            "items": [{"name": name, "size": (files_dir / name).stat().st_size if (files_dir / name).exists() else 0} for name in attachment_files],
+        }
+        (files_dir / "_index.json").write_text(json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 若实例文件名或附件信息发生调整，写回 meta.json，保证元数据与磁盘一致
     if meta_changed:
         target_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -1944,6 +2058,7 @@ def archive_model(
 
     summary = parse_summary(design, base_name, sess, images_dir)
     design_images, cover_meta = collect_design_images(design, sess, images_dir, base_name)
+    attachments = extract_design_attachments(design)
 
     parsed_origin = urlparse(fetch_url)
     origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}" if parsed_origin.scheme and parsed_origin.netloc else "https://makerworld.com.cn"
@@ -1996,7 +2111,7 @@ def archive_model(
             inst_record.get("name") or "",
         )
 
-    meta = build_meta(design, summary, design_images, cover_meta, inst_list, author, base_name)
+    meta = build_meta(design, summary, design_images, cover_meta, inst_list, author, base_name, attachments=attachments)
     meta_path = out_root / f"{base_name}_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     log(logger, "已保存 meta:", meta_path)

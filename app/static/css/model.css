@@ -430,6 +430,29 @@ body {
     line-height: 1.4;
 }
 
+.download-warning--retry {
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.download-warning--retry:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(229, 57, 53, 0.12);
+    background: rgba(229, 57, 53, 0.14);
+}
+
+.download-warning--success {
+    border-color: rgba(22, 163, 74, 0.28);
+    background: rgba(22, 163, 74, 0.10);
+    color: #166534;
+}
+
+.download-warning--error {
+    border-color: rgba(229, 57, 53, 0.28);
+    background: rgba(229, 57, 53, 0.10);
+    color: #b42318;
+}
+
 .download-warning i {
     font-size: 14px;
     color: inherit;

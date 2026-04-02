@@ -66,6 +66,13 @@
 
 ### 历史记录
 
+#### 2026-04-02 11:45
+- 版本号：`v5.7.2`
+- 更新说明链接：[`doc/logs/v5.7.2_update_log.md`](./v5.7.2_update_log.md)
+- 本次重点：支持归档页视频嵌入播放；支持模型页面附件归档与展示；下载不完整模型支持在线一键重试。
+- 同步人：AI（Codex）
+- 备注：同步根 `README.md` 当前版本区块，并新增 `v5.7.2` 版本更新日志。
+
 #### 2026-04-01 15:10
 - 版本号：`v5.7.0`
 - 更新说明链接：[`doc/logs/v5.7.0_update_log.md`](./v5.7.0_update_log.md)
@@ -138,6 +145,7 @@
 
 ## 版本日志索引
 
+- [`v5.7.2_update_log.md`](./v5.7.2_update_log.md)
 - [`v5.7.0_update_log.md`](./v5.7.0_update_log.md)
 - [`v5.6.0_update_log.md`](./v5.6.0_update_log.md)
 - [`v5.5.2_update_log.md`](./v5.5.2_update_log.md)

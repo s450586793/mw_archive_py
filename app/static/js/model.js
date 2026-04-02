@@ -481,17 +481,86 @@
         document.title = meta.title || '模型详情';
     }
 
+    function getDownloadWarningConfig(meta, canRetry) {
+        var status = String((meta && meta.download_status) || '').trim().toLowerCase();
+        if (status !== 'failed') {
+            return { visible: false, retryable: false, text: '' };
+        }
+        if (canRetry) {
+            return {
+                visible: true,
+                retryable: true,
+                text: '当前模型下载不完整，点击重试',
+            };
+        }
+        return {
+            visible: true,
+            retryable: false,
+            text: '当前模型下载不完整',
+        };
+    }
+
+    function setDownloadWarningMessage(type, text) {
+        var el = document.getElementById('downloadWarning');
+        if (!el) return;
+        var safeText = esc(text || '');
+        el.className = 'download-warning';
+        if (type === 'success') el.classList.add('download-warning--success');
+        if (type === 'error') el.classList.add('download-warning--error');
+        if (type === 'retry') el.classList.add('download-warning--retry');
+        el.innerHTML = '<i class="fas ' + (type === 'success' ? 'fa-circle-check' : (type === 'retry' ? 'fa-rotate-right' : 'fa-triangle-exclamation')) + '"></i><span>' + safeText + '</span>';
+        el.classList.remove('hidden');
+    }
+
+    async function handleModelRedownload() {
+        var meta = CURRENT_META || {};
+        var modelId = Number(meta.id || 0);
+        if (!modelId) {
+            setDownloadWarningMessage('error', '当前模型缺少重试所需的模型 ID');
+            return;
+        }
+        setDownloadWarningMessage('retry', '正在重新下载模型，请稍候...');
+        try {
+            var res = await fetch(apiUrl('/api/models/' + encodeURIComponent(modelId) + '/redownload'), {
+                method: 'POST',
+            });
+            var data = {};
+            try {
+                data = await res.json();
+            } catch (_) { }
+            if (!res.ok) {
+                throw new Error((data && (data.detail || data.message)) || ('HTTP ' + res.status));
+            }
+            var successCount = Number((data && data.success) || 0);
+            if (successCount <= 0) {
+                throw new Error('重新下载未成功，请检查 Cookie 或稍后重试');
+            }
+            setDownloadWarningMessage('success', '重新下载完成，页面即将刷新');
+            if (CURRENT_META) CURRENT_META.download_status = 'ok';
+            setTimeout(function () {
+                location.reload();
+            }, 900);
+        } catch (e) {
+            setDownloadWarningMessage('error', '重试失败：' + (e && e.message ? e.message : e));
+        }
+    }
+
     function renderDownloadWarning(meta) {
         var el = document.getElementById('downloadWarning');
         if (!el) return;
-        var status = String((meta && meta.download_status) || '').trim().toLowerCase();
-        if (status !== 'failed') {
-            el.classList.add('hidden');
+        el.onclick = null;
+        var config = getDownloadWarningConfig(meta, canUseBackendApi() && Number((meta && meta.id) || 0) > 0);
+        if (!config.visible) {
+            el.className = 'download-warning hidden';
             el.innerHTML = '';
             return;
         }
-        el.innerHTML = '<i class="fas fa-triangle-exclamation"></i><span>该模型下载失败，当前文件不完整</span>';
-        el.classList.remove('hidden');
+        setDownloadWarningMessage(config.retryable ? 'retry' : 'error', config.text);
+        if (config.retryable) {
+            el.onclick = function () {
+                handleModelRedownload();
+            };
+        }
     }
 
     function renderAuthor(meta) {
@@ -1894,6 +1963,7 @@
         module.exports = {
             parseVideoEmbedInfo: parseVideoEmbedInfo,
             transformSummaryHtml: transformSummaryHtml,
+            getDownloadWarningConfig: getDownloadWarningConfig,
         };
     }
 
