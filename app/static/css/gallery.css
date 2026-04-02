@@ -849,13 +849,12 @@ body.compact-mode .card-body {
 
   /* Header */
   header {
-    padding: 15px;
-    /* Equal 15px padding all around */
+    display: block;
+    padding: 14px 16px 12px;
     height: auto;
-    /* Allow auto height based on padding */
-    min-height: 60px;
-    flex-wrap: wrap;
-    gap: 12px;
+    min-height: 144px;
+    background: var(--bg-card);
+    backdrop-filter: none;
   }
 
   .brand h1 {
@@ -864,16 +863,63 @@ body.compact-mode .card-body {
 
   .brand {
     min-width: auto;
+    width: 100%;
+    margin-bottom: 10px;
   }
 
   .header-search {
-    display: none;
-    /* Hide search bar on mobile for simplicity, or we can move it into a menu */
+    display: flex;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .search-box {
+    min-width: 0;
+    height: 38px;
+    padding: 0 12px;
+    border-radius: 14px;
+  }
+
+  .search-box__input {
+    font-size: 14px;
+  }
+
+  #resetSearchBtn {
+    flex: 0 0 auto;
+    margin-left: 0 !important;
+    padding: 8px 10px;
+    font-size: 13px;
   }
 
   .header-actions {
     min-width: auto;
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .header-actions .btn,
+  .header-actions a.btn {
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 6px;
+    justify-content: center;
+    border-radius: 12px;
+    font-size: 13px;
+    gap: 6px;
+  }
+
+  .header-actions .btn i,
+  .header-actions a.btn i {
+    font-size: 15px;
+  }
+
+  .header-actions .theme-toggle-label {
+    font-size: 13px;
   }
 
   /* Main Layout */
@@ -888,9 +934,8 @@ body.compact-mode .card-body {
     position: static;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
-    padding: 16px;
+    padding: 14px 16px 12px;
     display: block;
-    /* Use block to ensure it auto-expands height */
   }
 
   /* Hide all sidebar sections except the first one (Source) */
@@ -916,43 +961,57 @@ body.compact-mode .card-body {
     display: flex;
     flex-direction: row;
     flex-wrap: wrap;
-    /* Wrap menu items */
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
   }
 
   .side-item {
     width: auto;
-    padding: 6px 12px;
+    padding: 10px 14px;
     white-space: nowrap;
     margin: 0;
+    border-radius: 14px;
+    background: var(--bg-hover);
   }
 
   .side-title {
-    margin: 0 0 12px 0;
+    margin: 0 0 8px 0;
     white-space: nowrap;
     width: 100%;
-    display: block;
+    display: flex;
   }
 
   .side-title:first-child {
     margin-top: 0;
   }
 
+  .side-item:hover {
+    transform: none;
+  }
+
+  #sourceMenu,
+  #folderMenu {
+    margin-bottom: 14px;
+  }
+
   /* Content */
   .content {
     padding: 16px;
     height: auto;
-    min-height: calc(100vh - 60px - 60px);
-    /* Approx */
+    min-height: calc(100vh - 120px);
   }
 
   /* Toolbar */
   .toolbar {
     flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+    align-items: stretch;
+    gap: 14px;
+  }
+
+  .toolbar-count {
+    font-size: 15px;
+    font-weight: 600;
   }
 
   .toolbar-actions-row,
@@ -961,20 +1020,55 @@ body.compact-mode .card-body {
     width: 100%;
   }
 
+  .toolbar-actions-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .toolbar-actions-row>.btn,
+  .toolbar-actions-row>.btn-v2-toggle {
+    width: 100%;
+    min-height: 40px;
+    justify-content: center;
+    padding: 8px 6px;
+    font-size: 13px;
+    gap: 6px;
+  }
+
+  .toolbar-actions-row>.btn i,
+  .toolbar-actions-row>.btn-v2-toggle i {
+    font-size: 14px;
+  }
+
   .selection-bar {
     flex-direction: column;
     align-items: flex-start;
   }
 
   .sort-order {
+    grid-column: 1 / -1;
     width: 100%;
     justify-content: space-between;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 10px 12px;
   }
 
   /* Grid */
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 16px;
+  }
+
+  body.compact-mode .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  body.compact-mode .card-cover {
+    aspect-ratio: 1 / 1.02;
   }
 
   .card-cover {
@@ -1003,5 +1097,9 @@ body.compact-mode .card-body {
 
   .folder-modal__inner {
     width: 100%;
+  }
+
+  #v2ToggleBtn {
+    display: none !important;
   }
 }

@@ -5,8 +5,6 @@ let activeSource = "";
 let activeFolder = "";
 let onlyFavorites = false;
 let onlyPrinted = false;
-let useV2 = localStorage.getItem("useV2") === "true";
-let compactMode = localStorage.getItem("mw_gallery_compact_mode") === "true";
 let selectionMode = false;
 let displayedCount = 20;
 let loadIncrement = 20;
@@ -16,6 +14,9 @@ let currentLightboxList = [];
 let currentLightboxIndex = 0;
 const filterChipLimit = 12;
 const authorChipLimit = 10;
+const MOBILE_VIEW_QUERY = "(max-width: 992px)";
+let useV2 = localStorage.getItem("useV2") === "true";
+let compactMode = false;
 const kwInput = document.getElementById("kw");
 const filterChips = document.getElementById("filterChips");
 const authorChips = document.getElementById("authorChips");
@@ -56,6 +57,32 @@ let printedSet = new Set();
 let selectedModelKeys = new Set();
 let folders = [];
 let infiniteScrollBound = false;
+
+function isMobileViewport() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(MOBILE_VIEW_QUERY).matches;
+}
+
+function getStoredCompactMode() {
+  try {
+    const raw = localStorage.getItem("mw_gallery_compact_mode");
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch (_) {
+    // ignore storage errors
+  }
+  return null;
+}
+
+function initializeCompactMode() {
+  const storedValue = getStoredCompactMode();
+  compactMode = storedValue === null ? isMobileViewport() : storedValue;
+}
+
+function getEffectiveUseV2() {
+  return isMobileViewport() ? true : useV2;
+}
 
 function getModelKey(m) {
   return String((m && m.dir) || "");
@@ -706,14 +733,16 @@ function getFilteredList() {
 
 function getModelDetailUrl(m) {
   const safeDir = encodeURIComponent(m.dir);
-  return useV2 ? `/v2/files/${safeDir}` : `/files/${safeDir}/index.html`;
+  return getEffectiveUseV2() ? `/v2/files/${safeDir}` : `/files/${safeDir}/index.html`;
 }
 
 function updateVersionToggle() {
   if (!v2ToggleBtn) return;
   const label = v2ToggleBtn.querySelector(".toggle-label");
-  if (label) label.textContent = useV2 ? "在线" : "本地";
-  v2ToggleBtn.classList.toggle("active", useV2);
+  const effectiveUseV2 = getEffectiveUseV2();
+  if (label) label.textContent = effectiveUseV2 ? "在线" : "本地";
+  v2ToggleBtn.classList.toggle("active", effectiveUseV2);
+  v2ToggleBtn.hidden = isMobileViewport();
 }
 
 function toggleSelectionForModel(modelKey) {
@@ -1176,10 +1205,16 @@ document.addEventListener("keydown", (e) => {
 
 if (v2ToggleBtn) {
   v2ToggleBtn.addEventListener("click", () => {
+    if (isMobileViewport()) return;
     useV2 = !useV2;
     localStorage.setItem("useV2", useV2 ? "true" : "false");
     updateVersionToggle();
   });
 }
 
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", updateVersionToggle);
+}
+
+initializeCompactMode();
 load();
