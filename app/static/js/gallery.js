@@ -39,6 +39,7 @@ const selectionToggleBtn = document.getElementById("selectionToggleBtn");
 const compactToggleBtn = document.getElementById("compactToggleBtn");
 const selectionBar = document.getElementById("selectionBar");
 const selectedCountEl = document.getElementById("selectedCount");
+const selectAllBtn = document.getElementById("selectAllBtn");
 const clearSelectionBtn = document.getElementById("clearSelectionBtn");
 const addToFolderBtn = document.getElementById("addToFolderBtn");
 const removeFromFolderBtn = document.getElementById("removeFromFolderBtn");
@@ -274,8 +275,10 @@ function syncModeButtons() {
 
 function syncSelectionBar() {
   const count = selectedModelKeys.size;
+  const selectableCount = getFilteredList().length;
   if (selectedCountEl) selectedCountEl.textContent = String(count);
   if (selectionBar) selectionBar.style.display = selectionMode ? "flex" : "none";
+  if (selectAllBtn) selectAllBtn.disabled = selectableCount === 0 || count >= selectableCount;
   if (addToFolderBtn) addToFolderBtn.disabled = count === 0;
   if (removeFromFolderBtn) {
     removeFromFolderBtn.disabled = count === 0 || !activeFolder;
@@ -284,6 +287,15 @@ function syncSelectionBar() {
   if (batchDeleteBtn) batchDeleteBtn.disabled = count === 0;
   if (clearSelectionBtn) clearSelectionBtn.disabled = count === 0;
   if (selectionToggleBtn) selectionToggleBtn.classList.toggle("has-selection", selectionMode && count > 0);
+}
+
+function selectAllFilteredModels() {
+  const keys = getFilteredList()
+    .map((m) => getModelKey(m))
+    .filter((key) => !!key);
+  selectedModelKeys = new Set(keys);
+  syncSelectionBar();
+  renderGrid();
 }
 
 function createFilterChip({ label, value, count, isActive, onSelect, extraClass, subLabel }) {
@@ -1161,6 +1173,7 @@ if (compactToggleBtn) {
   });
 }
 
+if (selectAllBtn) selectAllBtn.addEventListener("click", selectAllFilteredModels);
 if (clearSelectionBtn) clearSelectionBtn.addEventListener("click", clearSelection);
 if (addToFolderBtn) addToFolderBtn.addEventListener("click", openFolderModal);
 if (removeFromFolderBtn) removeFromFolderBtn.addEventListener("click", removeSelectedFromActiveFolder);
