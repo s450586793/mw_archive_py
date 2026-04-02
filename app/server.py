@@ -5,6 +5,7 @@ import shutil
 import sys
 import threading
 import uuid
+from time import perf_counter
 from copy import deepcopy
 from html import escape as escape_html
 from datetime import datetime
@@ -1352,6 +1353,13 @@ def ensure_config_dir():
 
 def now_iso() -> str:
     return datetime.now().isoformat()
+
+
+def format_duration_text(total_seconds: int) -> str:
+    seconds = max(int(total_seconds or 0), 0)
+    minutes = seconds // 60
+    remain_seconds = seconds % 60
+    return f"{minutes}分{remain_seconds}秒"
 
 
 def parse_iso_datetime(value: str) -> Optional[datetime]:
@@ -2742,6 +2750,8 @@ def build_archive_notify_payload(result: dict, final_dir: Path) -> dict:
         "cover_url": "",
         "online_url": f"{base_url}/v2/files/{final_dir.name}",
         "missing_count": len(result.get("missing_3mf") or []),
+        "duration_seconds": int(result.get("duration_seconds") or 0),
+        "duration_text": str(result.get("duration_text") or "").strip(),
     }
     meta_path = final_dir / "meta.json"
     if not meta_path.exists():
@@ -2766,6 +2776,7 @@ def archive_model_with_lock(url: str) -> dict:
         def _runner(cookie: str, platform: str, cookie_index: int, _entry: dict):
             reset_tmp_dir(TMP_DIR)
             logger.info("归档使用 %s Cookie #%s", platform, cookie_index + 1)
+            started_perf = perf_counter()
             result = archive_model(
                 model_url,
                 cookie,
@@ -2776,15 +2787,22 @@ def archive_model_with_lock(url: str) -> dict:
             )
             tmp_work_dir = Path(result.get("work_dir") or "")
             final_dir = finalize_tmp_archive(tmp_work_dir, Path(CFG["download_dir"]), logger)
+            duration_seconds = max(int(round(perf_counter() - started_perf)), 0)
+            duration_text = format_duration_text(duration_seconds)
             result["work_dir"] = str(final_dir.resolve())
+            result["duration_seconds"] = duration_seconds
+            result["duration_text"] = duration_text
             action = result.get("action") or "created"
-            result["message"] = "模型已更新成功" if action == "updated" else "模型归档成功"
+            base_message = "模型已更新成功" if action == "updated" else "模型归档成功"
+            result["message"] = f"{base_message}（耗时 {duration_text}）"
             result["notify_payload"] = build_archive_notify_payload(result, final_dir)
             result["cookie_context"] = {"platform": platform, "index": cookie_index}
             meta_path = final_dir / "meta.json"
             if meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    meta["archiveDurationSeconds"] = duration_seconds
+                    meta["archiveDurationText"] = duration_text
                     if result.get("missing_3mf"):
                         mark_model_download_failed(
                             meta,

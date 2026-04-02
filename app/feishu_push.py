@@ -3,6 +3,8 @@ from typing import Callable, Dict, Optional
 
 import requests
 
+from notification_templates import build_alert_notification, build_success_notification
+
 
 class FeishuPushService:
     """
@@ -40,10 +42,12 @@ class FeishuPushService:
         if not webhook:
             return
 
-        text = self._format_success_text(payload or {})
+        rendered = build_success_notification(payload or {})
+        text = rendered.get("text") or ""
+        title = rendered.get("title") or "模型归档通知"
         image_key = self._resolve_image_key(payload or {}, cfg)
         if image_key:
-            ok = self._send_post_with_image(webhook, title="模型归档通知", text=text, image_key=image_key)
+            ok = self._send_post_with_image(webhook, title=title, text=text, image_key=image_key)
             if ok:
                 return
         self._send_text(webhook, text)
@@ -69,41 +73,10 @@ class FeishuPushService:
         }
 
     def _format_success_text(self, payload: Dict) -> str:
-        title = str(payload.get("title") or "").strip()
-        online_url = str(payload.get("online_url") or "").strip()
-        action = str(payload.get("action") or "created").strip()
-        action_text = "模型已更新" if action == "updated" else "模型归档成功"
-        base_name = str(payload.get("base_name") or "").strip()
-        missing_count = int(payload.get("missing_count") or 0)
-
-        lines = [f"✅ {action_text}"]
-        if title:
-            lines.append(f"标题：{title}")
-        if base_name:
-            lines.append(f"目录：{base_name}")
-        if online_url:
-            lines.append(f"在线地址：{online_url}")
-        if missing_count > 0:
-            lines.append(f"缺失 3MF：{missing_count}")
-        return "\n".join(lines)
+        return build_success_notification(payload).get("text") or ""
 
     def _format_alert_text(self, alert, detail: Optional[str] = None) -> str:
-        if isinstance(alert, dict):
-            icon = str(alert.get("icon") or "⚠️").strip() or "⚠️"
-            title = str(alert.get("title") or "通知").strip()
-            summary = str(alert.get("summary") or "").strip()
-            lines = alert.get("lines") if isinstance(alert.get("lines"), list) else []
-            text_lines = [f"{icon} {title}"]
-            if summary:
-                text_lines.append(summary)
-            for line in lines:
-                value = str(line or "").strip()
-                if value:
-                    text_lines.append(value)
-            return "\n".join(text_lines)
-        title = str(alert or "通知").strip()
-        body = str(detail or "").strip()
-        return f"⚠️ {title}\n{body}".strip()
+        return build_alert_notification(alert, detail).get("text") or ""
 
     def _resolve_image_key(self, payload: Dict, cfg: Dict) -> str:
         app_id = str(cfg.get("app_id") or "").strip()

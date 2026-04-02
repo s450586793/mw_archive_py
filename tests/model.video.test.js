@@ -41,4 +41,11 @@ run('falls back to safe external link for unsupported video providers', function
     assert.doesNotMatch(out, /<iframe/i);
     assert.match(out, /summary-video__fallback/);
     assert.match(out, /https:\/\/example\.com\/video\/123/);
+    assert.match(out, /打开原视频/);
+});
+
+run('uses chinese helper text for supported embedded videos', function () {
+    const html = '<figure class="media"><oembed url="https://www.bilibili.com/video/BV1yWHNzZEYx/"></oembed></figure>';
+    const out = transformSummaryHtml(html, function (rel) { return './' + rel; });
+    assert.match(out, /在新标签页打开原视频/);
 });

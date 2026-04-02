@@ -201,8 +201,8 @@
 
         if (!info.embedUrl) {
             return '<div class="summary-video summary-video__fallback">' +
-                '<div class="summary-video__meta">Embedded playback is not available for this video link.</div>' +
-                '<a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">Open original video</a>' +
+                '<div class="summary-video__meta">当前视频不支持直接嵌入播放，请打开原视频查看。</div>' +
+                '<a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">打开原视频</a>' +
                 '</div>';
         }
 
@@ -210,7 +210,7 @@
             '<div class="summary-video__inner">' +
             '<iframe class="summary-video__frame" src="' + escapeAttr(info.embedUrl) + '" title="' + safeLabel + ' video" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>' +
             '</div>' +
-            '<div class="summary-video__meta"><a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">Open original video in a new tab</a></div>' +
+            '<div class="summary-video__meta"><a class="summary-video__link" href="' + safeSourceUrl + '" target="_blank" rel="noopener noreferrer">在新标签页打开原视频</a></div>' +
             '</div>';
     }
 
