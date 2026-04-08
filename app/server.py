@@ -9,6 +9,7 @@ import shutil
 import sys
 import threading
 import uuid
+from base64 import urlsafe_b64decode
 from copy import deepcopy
 from html import escape as escape_html
 from datetime import datetime
@@ -20,6 +21,7 @@ import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -62,6 +64,7 @@ DEFAULT_TOKEN_STORE = {
 }
 TOKEN_PREFIX = "mwat_"
 TOKEN_USAGE_UPDATE_INTERVAL_SECONDS = 300
+SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 MANUAL_COUNTER_LOCK = threading.Lock()
 MANUAL_COUNTER_FILE = "_manual_import_counter.json"
 
@@ -1005,17 +1008,45 @@ def is_auth_enabled(cfg: Optional[dict] = None) -> bool:
     return bool((auth_cfg or {}).get("enabled", True))
 
 
-def is_session_authenticated(request: Request) -> bool:
+def decode_session_cookie(raw_value: str, cfg: Optional[dict] = None) -> dict:
+    secret_key = str((((cfg if isinstance(cfg, dict) else CFG) or {}).get("auth") or {}).get("session_secret") or "").strip()
+    if not raw_value or not secret_key:
+        return {}
     try:
-        return bool(request.session.get("user"))
+        signer = TimestampSigner(secret_key)
+        unsigned = signer.unsign(raw_value, max_age=SESSION_MAX_AGE_SECONDS)
+        if isinstance(unsigned, str):
+            unsigned = unsigned.encode("utf-8")
+        padded = unsigned + b"=" * (-len(unsigned) % 4)
+        payload = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (BadSignature, SignatureExpired, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def get_session_user(request: Request, cfg: Optional[dict] = None) -> str:
+    try:
+        user = str(request.session.get("user") or "").strip()
+        if user:
+            return user
     except Exception:
-        return False
+        pass
+    try:
+        payload = decode_session_cookie(str(request.cookies.get("session") or "").strip(), cfg)
+    except Exception:
+        payload = {}
+    return str(payload.get("user") or "").strip()
+
+
+def is_session_authenticated(request: Request) -> bool:
+    return bool(get_session_user(request))
 
 
 def require_session_user(request: Request) -> str:
-    if not is_session_authenticated(request):
+    user = get_session_user(request)
+    if not user:
         raise HTTPException(status_code=401, detail="未登录")
-    return str(request.session.get("user") or "").strip()
+    return user
 
 
 def load_gallery_flags() -> dict:
@@ -1605,7 +1636,7 @@ async def auth_middleware(request: Request, call_next):
         if auth_context is None and is_session_authenticated(request):
             auth_context = {
                 "type": "session",
-                "username": str(request.session.get("user") or "").strip(),
+                "username": get_session_user(request, CFG),
             }
         if auth_context is None:
             return JSONResponse(
