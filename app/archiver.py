@@ -511,6 +511,11 @@ def parse_summary(design: dict, base_name: str, session: requests.Session, out_d
             continue
         ext = pick_ext_from_url(src)
         name = f"summary_img_{idx:02d}.{ext}"
+        try:
+            download_file(session, src, out_dir / name)
+        except Exception as exc:
+            log("摘要图片下载失败，保留原始链接：", src, exc)
+            continue
         img["src"] = f"./images/{name}"
         summary_images.append(
             {
@@ -520,8 +525,6 @@ def parse_summary(design: dict, base_name: str, session: requests.Session, out_d
                 "fileName": name,
             }
         )
-        # 下载
-        download_file(session, src, out_dir / name)
         idx += 1
 
     html_local = str(soup)

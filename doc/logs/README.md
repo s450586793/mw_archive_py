@@ -66,6 +66,13 @@
 
 ### 历史记录
 
+#### 2026-04-08 11:20
+- 版本号：`v5.7.3`
+- 更新说明链接：[`doc/logs/v5.7.3_update_log.md`](./v5.7.3_update_log.md)
+- 本次重点：修复摘要图片 `403` 导致整个模型归档失败；摘要图片失败时保留原始远程链接并继续归档；补充对应 Bug 文档与回归测试。
+- 同步人：AI（Codex）
+- 备注：同步根 `README.md` 当前版本区块，并新增 `v5.7.3` 版本更新日志。
+
 #### 2026-04-02 11:45
 - 版本号：`v5.7.2`
 - 更新说明链接：[`doc/logs/v5.7.2_update_log.md`](./v5.7.2_update_log.md)
@@ -145,6 +152,7 @@
 
 ## 版本日志索引
 
+- [`v5.7.3_update_log.md`](./v5.7.3_update_log.md)
 - [`v5.7.2_update_log.md`](./v5.7.2_update_log.md)
 - [`v5.7.0_update_log.md`](./v5.7.0_update_log.md)
 - [`v5.6.0_update_log.md`](./v5.6.0_update_log.md)

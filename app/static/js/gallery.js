@@ -59,6 +59,13 @@ let selectedModelKeys = new Set();
 let folders = [];
 let infiniteScrollBound = false;
 
+function modelFileUrl(modelDir, relPath) {
+  if (typeof window !== "undefined" && typeof window.buildModelFileUrl === "function") {
+    return window.buildModelFileUrl(modelDir, relPath);
+  }
+  return `/files/${encodeURIComponent(String(modelDir || ""))}/${String(relPath || "").split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
 function isMobileViewport() {
   return typeof window !== "undefined"
     && typeof window.matchMedia === "function"
@@ -690,7 +697,7 @@ function openLightbox(list, index) {
   currentLightboxList = list;
   currentLightboxIndex = index;
   const m = list[index];
-  lightboxImg.src = `/files/${m.dir}/images/${m.cover || "design_01.png"}`;
+  lightboxImg.src = modelFileUrl(m.dir, `images/${m.cover || "design_01.png"}`);
   lightboxImg.alt = m.title || m.baseName || "";
   if (lightboxCaption) lightboxCaption.textContent = m.title || m.baseName || "";
   lightbox.style.display = "flex";
@@ -849,7 +856,7 @@ function renderGrid(append = false) {
     });
 
     const cover = document.createElement("img");
-    cover.src = `/files/${m.dir}/images/${m.cover || "design_01.png"}`;
+    cover.src = modelFileUrl(m.dir, `images/${m.cover || "design_01.png"}`);
     cover.loading = "lazy";
     cover.alt = m.title || m.baseName || "模型封面";
     cover.onerror = () => { cover.src = "/static/imgs/fav.png"; };
@@ -891,7 +898,7 @@ function renderGrid(append = false) {
     authorWrap.className = "author";
     if (m.author?.avatarRelPath) {
       const avatar = document.createElement("img");
-      avatar.src = `/files/${m.dir}/${m.author.avatarRelPath}`;
+      avatar.src = modelFileUrl(m.dir, m.author.avatarRelPath);
       avatar.alt = m.author?.name || "User";
       authorWrap.appendChild(avatar);
     } else {
