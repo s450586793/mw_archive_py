@@ -9,7 +9,7 @@ services:
     volumes:
       - ./app/data:/app/data
       - ./app/logs:/app/logs
-      - ./app/config.json:/app/config.json
-      - ./app/tokens.json:/app/tokens.json
-      - ./app/cookie.txt:/app/cookie.txt
+      - ./app/config:/app/config
+      - ./app/watch:/app/watch
+      - ./app/organize:/app/organize
     restart: unless-stopped

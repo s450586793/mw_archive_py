@@ -11,11 +11,13 @@ RUN apt-get update \
 COPY app/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# 准备默认数据/日志目录与持久化文件（可通过挂载覆盖）
-RUN mkdir -p /app/data /app/logs \
-    && touch /app/cookie.txt /app/config.json /app/tokens.json
+# 准备默认数据/日志/配置/监控目录（可通过挂载覆盖）
+RUN mkdir -p /app/data /app/logs /app/config /app/watch /app/organize
 
 EXPOSE 8000
-VOLUME ["/app/data", "/app/logs", "/app/config.json", "/app/tokens.json", "/app/cookie.txt"]
+VOLUME ["/app/data", "/app/logs", "/app/config", "/app/watch", "/app/organize"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
