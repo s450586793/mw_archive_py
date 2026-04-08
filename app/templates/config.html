@@ -44,6 +44,9 @@
         <button class="btn btn-secondary" type="button" data-manual-import-open>
           <i class="fas fa-upload"></i> 手动导入
         </button>
+        <a class="btn btn-outline" href="/logout">
+          <i class="fas fa-right-from-bracket"></i> 退出登录
+        </a>
         <a class="btn btn-outline" href="/">
           <i class="fas fa-arrow-left"></i> 返回模型库
         </a>
@@ -56,6 +59,9 @@
       <div class="tabs">
         <button class="tab active" data-tab="config">
           <i class="fas fa-cog"></i> 配置信息
+        </button>
+        <button class="tab" data-tab="security">
+          <i class="fas fa-shield-halved"></i> 安全设置
         </button>
         <button class="tab" data-tab="archive">
           <i class="fas fa-download"></i> 模型归档
@@ -100,6 +106,62 @@
           <button class="btn btn-primary" onclick="saveCookie()">
             <i class="fas fa-save"></i> 保存 Cookie
           </button>
+        </div>
+      </div>
+
+      <div class="tab-content" id="tab-security">
+        <div class="form-section">
+          <h3>登录与 Token</h3>
+          <p class="description">网页访问使用登录会话，外部 API 调用使用 Bearer Token。</p>
+
+          <div class="info-box">
+            <i class="fas fa-shield"></i>
+            <div class="info-box-content">
+              <div class="info-box-title">使用方式</div>
+              <div class="info-box-text">
+                登录账号来自服务端配置文件；Token 只在生成时展示一次，后续请在调用 API 时通过
+                <code>Authorization: Bearer &lt;token&gt;</code> 传递。
+              </div>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">当前登录用户</label>
+              <input type="text" id="authUsername" class="form-input" readonly />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Token 存储文件</label>
+              <input type="text" id="tokenFile" class="form-input" readonly />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">生成新 Token</label>
+            <div class="archive-input-group">
+              <input type="text" id="tokenNameInput" class="form-input" placeholder="例如：tampermonkey / chrome-extension / mobile" />
+              <button class="btn btn-primary" type="button" onclick="createApiToken()">
+                <i class="fas fa-key"></i> 生成 Token
+              </button>
+            </div>
+            <div class="text-muted text-small mt-sm">建议按用途命名，便于后续撤销。</div>
+          </div>
+
+          <div class="form-section" id="newTokenSection" style="display:none; margin-top: 18px;">
+            <h3>新生成 Token</h3>
+            <p class="description">该 Token 仅展示一次，请立即复制保存。</p>
+            <div class="archive-input-group">
+              <input type="text" id="newTokenValue" class="form-input" readonly />
+              <button class="btn btn-secondary" type="button" onclick="copyNewToken()">
+                <i class="fas fa-copy"></i> 复制
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 18px;">
+            <label class="form-label">已生成 Token</label>
+            <div id="tokenListBox" class="text-muted">加载中...</div>
+          </div>
         </div>
       </div>
 
@@ -365,13 +427,42 @@
       }
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    async function apiFetch(url, options = {}) {
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        window.location.href = '/login';
+        throw new Error('未授权，请重新登录');
+      }
+      return res;
+    }
+
     // Config Functions
     async function loadConfig() {
-      const res = await fetch('/api/config');
+      const res = await apiFetch('/api/config');
       const data = await res.json();
       document.getElementById('downloadDir').value = data.download_dir;
       document.getElementById('logsDir').value = data.logs_dir;
       document.getElementById('cookieTime').textContent = 'Cookie 更新时间: ' + (data.cookie_updated_at || '-');
+      document.getElementById('tokenFile').value = data.token_file || '';
+      document.getElementById('authUsername').value = data.auth_username || '';
+    }
+
+    async function loadAuthStatus() {
+      const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.logged_in && data.username) {
+        document.getElementById('authUsername').value = data.username;
+      }
     }
 
     async function saveCookie() {
@@ -381,7 +472,7 @@
         return;
       }
       appendLog('保存 Cookie...');
-      const res = await fetch('/api/cookie', {
+      const res = await apiFetch('/api/cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cookie })
@@ -401,7 +492,7 @@
         return;
       }
       appendLog('开始归档: ' + url);
-      const res = await fetch('/api/archive', {
+      const res = await apiFetch('/api/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -422,7 +513,7 @@
     async function retryMissing() {
       if (!confirm('请先更新 Cookie,是否开始重新下载缺失 3MF 记录?')) return;
       appendLog('开始重新下载缺失 3MF...');
-      const res = await fetch('/api/logs/missing-3mf/redownload', { method: 'POST' });
+      const res = await apiFetch('/api/logs/missing-3mf/redownload', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         appendLog(`重新下载完成,成功 ${data.success}/${data.processed},失败 ${data.failed}`);
@@ -438,7 +529,7 @@
     async function rebuildArchivedPages() {
       if (!confirm('将修复历史归档页面与下载映射，是否继续？')) return;
       appendLog('开始执行归档更新...');
-      const res = await fetch('/api/archive/rebuild-pages', {
+      const res = await apiFetch('/api/archive/rebuild-pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true })
@@ -467,7 +558,7 @@
     async function deleteMissing(index) {
       if (!confirm('确定删除此记录吗?')) return;
       appendLog('删除缺失记录 #' + index);
-      const res = await fetch('/api/logs/missing-3mf/' + index, { method: 'DELETE' });
+      const res = await apiFetch('/api/logs/missing-3mf/' + index, { method: 'DELETE' });
       if (res.ok) {
         appendLog('已删除');
         loadMissing();
@@ -478,7 +569,7 @@
 
     async function loadMissing() {
       const box = document.getElementById('missingBox');
-      const res = await fetch('/api/logs/missing-3mf');
+      const res = await apiFetch('/api/logs/missing-3mf');
       if (!res.ok) {
         box.innerHTML = '<div class="text-muted">加载失败</div>';
         return;
@@ -515,8 +606,98 @@
       box.innerHTML = html;
     }
 
+    async function loadApiTokens() {
+      const box = document.getElementById('tokenListBox');
+      box.innerHTML = '<div class="text-muted">加载中...</div>';
+      const res = await apiFetch('/api/auth/tokens');
+      if (!res.ok) {
+        box.innerHTML = '<div class="text-muted">Token 列表加载失败</div>';
+        return;
+      }
+      const data = await res.json();
+      const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      if (!tokens.length) {
+        box.innerHTML = '<div class="text-muted">暂无 Token，建议为油猴、Chrome 插件或自定义客户端分别生成独立 Token。</div>';
+        return;
+      }
+      const rows = tokens.map(item => {
+        const active = item.active !== false;
+        const lastUsed = item.last_used_at || '-';
+        const createdAt = item.created_at || '-';
+        const preview = escapeHtml(item.token_preview || '');
+        const name = escapeHtml(item.name || 'API Token');
+        return `
+          <tr>
+            <td>${name}</td>
+            <td><code>${preview}</code></td>
+            <td>${createdAt}</td>
+            <td>${lastUsed}</td>
+            <td><span class="status-badge ${active ? 'success' : 'error'}">${active ? '生效中' : '已撤销'}</span></td>
+            <td>
+              ${active ? `<button class="btn btn-table btn-danger" onclick="deleteApiToken('${escapeHtml(item.id || '')}')"><i class="fas fa-trash"></i> 撤销</button>` : ''}
+            </td>
+          </tr>
+        `;
+      }).join('');
+      box.innerHTML = `
+        <div class="missing-table-wrapper">
+          <table class="missing-table">
+            <thead>
+              <tr><th>名称</th><th>预览</th><th>创建时间</th><th>最近使用</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function createApiToken() {
+      const input = document.getElementById('tokenNameInput');
+      const name = input.value.trim() || 'API Token';
+      appendLog('生成 API Token: ' + name);
+      const res = await apiFetch('/api/auth/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        alert('生成 Token 失败: ' + err);
+        return;
+      }
+      const data = await res.json();
+      document.getElementById('newTokenSection').style.display = 'block';
+      document.getElementById('newTokenValue').value = data.token || '';
+      input.value = '';
+      appendLog('API Token 已生成，请立即复制保存');
+      await loadApiTokens();
+    }
+
+    async function deleteApiToken(tokenId) {
+      if (!tokenId) return;
+      if (!confirm('确定撤销这个 Token 吗？撤销后引用它的插件或脚本会立即失效。')) return;
+      const res = await apiFetch('/api/auth/tokens/' + encodeURIComponent(tokenId), { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.text();
+        alert('撤销 Token 失败: ' + err);
+        return;
+      }
+      appendLog('已撤销 API Token: ' + tokenId);
+      await loadApiTokens();
+    }
+
+    async function copyNewToken() {
+      const value = document.getElementById('newTokenValue').value;
+      if (!value) return;
+      await navigator.clipboard.writeText(value);
+      appendLog('新 Token 已复制到剪贴板');
+      alert('Token 已复制到剪贴板');
+    }
+
     // Initialize
     loadConfig();
+    loadAuthStatus();
+    loadApiTokens();
     loadMissing();
   </script>
   <script src="/static/js/manual_import.js?v=5.2" defer></script>

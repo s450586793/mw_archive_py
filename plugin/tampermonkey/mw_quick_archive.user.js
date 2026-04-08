@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MakerWorld 快速归档助手
 // @namespace    https://makerworld.com.cn/
-// @version      1.0.1
-// @description  在 MakerWorld 模型页一键归档，支持后端地址与手动 Cookie 配置
+// @version      1.0.2
+// @description  在 MakerWorld 模型页一键归档，支持后端地址、API Token 与手动 Cookie 配置
 // @author       sonic
 // @match        https://makerworld.com.cn/zh/models/*
 // @icon         https://aliyun-wb-h9vflo19he.oss-cn-shanghai.aliyuncs.com/use/makerworld_archive.png
@@ -22,6 +22,7 @@
   window.__MW_QUICK_ARCHIVE_LOADED__ = true;
 
   const KEY_API_BASE = 'mw_archive_api_base';
+  const KEY_API_TOKEN = 'mw_archive_api_token';
   const KEY_MANUAL_COOKIE = 'mw_archive_manual_cookie';
   const DEFAULT_API_BASE = 'http://127.0.0.1:8000';
   const BTN_ID = 'mw-quick-archive-btn';
@@ -44,8 +45,16 @@
     return String(GM_getValue(KEY_MANUAL_COOKIE, '') || '').trim();
   }
 
+  function getApiToken() {
+    return String(GM_getValue(KEY_API_TOKEN, '') || '').trim();
+  }
+
   function setManualCookie(cookie) {
     GM_setValue(KEY_MANUAL_COOKIE, String(cookie || '').trim());
+  }
+
+  function setApiToken(token) {
+    GM_setValue(KEY_API_TOKEN, String(token || '').trim());
   }
 
   function notify(text, title = 'MakerWorld 归档助手') {
@@ -59,12 +68,17 @@
 
   function requestJson(method, url, bodyObj) {
     return new Promise((resolve, reject) => {
+      const token = getApiToken();
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
       GM_xmlhttpRequest({
         method,
         url,
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         data: bodyObj ? JSON.stringify(bodyObj) : undefined,
         timeout: 30000,
         onload: (resp) => {
@@ -172,6 +186,10 @@
         <input id="mw-quick-api-input" type="text"
           style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:10px;"
           placeholder="http://127.0.0.1:8000" />
+        <div style="font-size:13px;color:#666;margin-bottom:8px;">API Token</div>
+        <input id="mw-quick-token-input" type="text"
+          style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:10px;font-family:Consolas,'Courier New',monospace;"
+          placeholder="mwat_xxx" />
         <div style="font-size:13px;color:#666;margin-bottom:8px;">手动 Cookie</div>
         <textarea id="mw-quick-cookie-input"
           style="width:100%;min-height:100px;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;font-family:Consolas,'Courier New',monospace;"
@@ -196,7 +214,9 @@
 
       panel.querySelector('#mw-quick-save').addEventListener('click', () => {
         const input = panel.querySelector('#mw-quick-api-input');
+        const tokenInput = panel.querySelector('#mw-quick-token-input');
         setApiBase(input.value);
+        setApiToken(tokenInput.value);
         notify(`已保存后端地址: ${getApiBase()}`);
         modal.remove();
       });
@@ -204,11 +224,13 @@
       panel.querySelector('#mw-quick-save-cookie').addEventListener('click', async () => {
         try {
           const cookieInput = panel.querySelector('#mw-quick-cookie-input');
+          const tokenInput = panel.querySelector('#mw-quick-token-input');
           const cookieText = String(cookieInput.value || '').trim();
           if (!cookieText) {
             notify('手动 Cookie 不能为空');
             return;
           }
+          setApiToken(tokenInput.value);
           setManualCookie(cookieText);
           await syncManualCookieToBackend(cookieText);
           modal.remove();
@@ -220,6 +242,8 @@
 
     const input = modal.querySelector('#mw-quick-api-input');
     if (input) input.value = getApiBase();
+    const tokenInput = modal.querySelector('#mw-quick-token-input');
+    if (tokenInput) tokenInput.value = getApiToken();
     const cookieInput = modal.querySelector('#mw-quick-cookie-input');
     if (cookieInput) cookieInput.value = getManualCookie();
   }

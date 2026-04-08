@@ -19,6 +19,17 @@ async function setApiBase(apiBase) {
   return normalized;
 }
 
+async function getApiToken() {
+  const data = await chrome.storage.local.get(["apiToken"]);
+  return String(data.apiToken || "").trim();
+}
+
+async function setApiToken(apiToken) {
+  const normalized = String(apiToken || "").trim();
+  await chrome.storage.local.set({ apiToken: normalized });
+  return normalized;
+}
+
 async function getManualCookie() {
   const data = await chrome.storage.local.get(["manualCookie"]);
   return String(data.manualCookie || "").trim();
@@ -123,10 +134,19 @@ async function buildMakerworldCookieHeader() {
   return { cookie, count: parseCookieNames(cookie).length, source, hasCfClearance: hasCfClearance(cookie) };
 }
 
+async function buildAuthHeaders() {
+  const token = await getApiToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function postJson(url, body) {
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await buildAuthHeaders(),
     body: JSON.stringify(body || {})
   });
   const text = await resp.text();
@@ -201,7 +221,9 @@ async function archiveModel(modelUrl) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   const apiBase = await getApiBase();
+  const apiToken = await getApiToken();
   await setApiBase(apiBase);
+  await setApiToken(apiToken);
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -214,6 +236,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (action === "setApiBase") {
       const apiBase = await setApiBase(msg.apiBase);
       sendResponse({ ok: true, apiBase });
+      return;
+    }
+    if (action === "getApiToken") {
+      sendResponse({ ok: true, apiToken: await getApiToken() });
+      return;
+    }
+    if (action === "setApiToken") {
+      const apiToken = await setApiToken(msg.apiToken);
+      sendResponse({ ok: true, apiToken });
       return;
     }
     if (action === "getManualCookie") {

@@ -11,22 +11,29 @@ function normalizeApiBase(raw) {
 }
 
 async function init() {
-  const [apiRes, cookieRes] = await Promise.all([
+  const [apiRes, cookieRes, tokenRes] = await Promise.all([
     send({ action: "getApiBase" }),
-    send({ action: "getManualCookie" })
+    send({ action: "getManualCookie" }),
+    send({ action: "getApiToken" })
   ]);
   if (apiRes && apiRes.ok) document.getElementById("apiBase").value = apiRes.apiBase || "";
+  if (tokenRes && tokenRes.ok) document.getElementById("apiToken").value = tokenRes.apiToken || "";
   if (cookieRes && cookieRes.ok) document.getElementById("manualCookie").value = cookieRes.cookie || "";
 }
 
 document.getElementById("saveBtn").addEventListener("click", async () => {
   const apiBase = normalizeApiBase(document.getElementById("apiBase").value);
-  const res = await send({ action: "setApiBase", apiBase });
-  if (res && res.ok) {
-    setStatus(`已保存: ${res.apiBase}`);
-    document.getElementById("apiBase").value = res.apiBase || "";
+  const apiToken = document.getElementById("apiToken").value.trim();
+  const [baseRes, tokenRes] = await Promise.all([
+    send({ action: "setApiBase", apiBase }),
+    send({ action: "setApiToken", apiToken })
+  ]);
+  if (baseRes && baseRes.ok && tokenRes && tokenRes.ok) {
+    setStatus(`已保存: ${baseRes.apiBase}`);
+    document.getElementById("apiBase").value = baseRes.apiBase || "";
+    document.getElementById("apiToken").value = tokenRes.apiToken || "";
   } else {
-    setStatus((res && res.message) || "保存失败");
+    setStatus((baseRes && baseRes.message) || (tokenRes && tokenRes.message) || "保存失败");
   }
 });
 

@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  mw-archiver:
+    image: ghcr.io/s450586793/mw-archiver:latest
+    container_name: mw-archiver
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/data:/app/data
+      - ./app/logs:/app/logs
+      - ./app/config.json:/app/config.json
+      - ./app/tokens.json:/app/tokens.json
+      - ./app/cookie.txt:/app/cookie.txt
+    restart: unless-stopped

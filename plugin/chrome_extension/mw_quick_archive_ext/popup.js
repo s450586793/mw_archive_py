@@ -69,7 +69,12 @@ document.getElementById("testConnBtn").addEventListener("click", async () => {
   }
   setStatus(`测试连接中: ${apiBase}`);
   try {
-    const resp = await fetch(`${apiBase}/api/config`, { method: "GET", cache: "no-store" });
+    const tokenRes = await send({ action: "getApiToken" });
+    const headers = {};
+    if (tokenRes && tokenRes.ok && tokenRes.apiToken) {
+      headers.Authorization = `Bearer ${tokenRes.apiToken}`;
+    }
+    const resp = await fetch(`${apiBase}/api/config`, { method: "GET", cache: "no-store", headers });
     if (!resp.ok) {
       setStatus(`连接失败: HTTP ${resp.status}`);
       return;

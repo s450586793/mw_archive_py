@@ -1,14 +1,19 @@
+import hashlib
+import hmac
 import json
 import logging
+import os
 import re
+import secrets
 import shutil
 import sys
 import threading
 import uuid
+from copy import deepcopy
 from html import escape as escape_html
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -37,13 +42,26 @@ from three_mf_parser import (
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 GALLERY_FLAGS_PATH = BASE_DIR / "gallery_flags.json"
+TOKEN_STORE_PATH = BASE_DIR / "tokens.json"
 TMP_DIR = BASE_DIR / "tmp"
 MANUAL_DRAFT_ROOT = TMP_DIR / "manual_drafts"
 DEFAULT_CONFIG = {
     "download_dir": "./data",
     "cookie_file": "./cookie.txt",
     "logs_dir": "./logs",
+    "token_file": "./tokens.json",
+    "auth": {
+        "enabled": True,
+        "username": "admin",
+        "password": "change-me",
+        "session_secret": "",
+    },
 }
+DEFAULT_TOKEN_STORE = {
+    "tokens": [],
+}
+TOKEN_PREFIX = "mwat_"
+TOKEN_USAGE_UPDATE_INTERVAL_SECONDS = 300
 MANUAL_COUNTER_LOCK = threading.Lock()
 MANUAL_COUNTER_FILE = "_manual_import_counter.json"
 
@@ -68,6 +86,62 @@ def strip_html(value: str) -> str:
     if not value:
         return ""
     return _TAG_RE.sub("", value).strip()
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def parse_iso_datetime(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def _merge_defaults(target: dict, defaults: dict) -> bool:
+    changed = False
+    for key, value in defaults.items():
+        if key not in target:
+            target[key] = deepcopy(value)
+            changed = True
+            continue
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            if _merge_defaults(target[key], value):
+                changed = True
+    return changed
+
+
+def _normalize_auth_config(raw_auth: Any) -> dict:
+    auth = deepcopy(DEFAULT_CONFIG["auth"])
+    if isinstance(raw_auth, dict):
+        for key, value in raw_auth.items():
+            auth[key] = value
+
+    env_enabled = os.environ.get("MW_AUTH_ENABLED")
+    if env_enabled is not None:
+        auth["enabled"] = str(env_enabled).strip().lower() not in {"0", "false", "off", "no"}
+    else:
+        auth["enabled"] = bool(auth.get("enabled", True))
+
+    env_username = os.environ.get("MW_AUTH_USERNAME")
+    if env_username:
+        auth["username"] = env_username
+    auth["username"] = str(auth.get("username") or DEFAULT_CONFIG["auth"]["username"]).strip() or DEFAULT_CONFIG["auth"]["username"]
+
+    env_password = os.environ.get("MW_AUTH_PASSWORD")
+    if env_password:
+        auth["password"] = env_password
+    auth["password"] = str(auth.get("password") or DEFAULT_CONFIG["auth"]["password"])
+
+    env_session_secret = os.environ.get("MW_SESSION_SECRET")
+    if env_session_secret:
+        auth["session_secret"] = env_session_secret
+    auth["session_secret"] = str(auth.get("session_secret") or "").strip()
+    return auth
 
 
 def resolve_collect_iso(data: dict, meta_path: Path) -> str:
@@ -717,34 +791,231 @@ def build_local_model_dir(title: str) -> tuple[str, Path]:
 def load_config():
     changed = False
     if CONFIG_PATH.exists():
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = deepcopy(DEFAULT_CONFIG)
+            changed = True
     else:
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = deepcopy(DEFAULT_CONFIG)
         changed = True
     if not isinstance(cfg, dict):
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = deepcopy(DEFAULT_CONFIG)
         changed = True
-    for k, v in DEFAULT_CONFIG.items():
-        if k not in cfg:
-            cfg[k] = v
-            changed = True
+    if _merge_defaults(cfg, DEFAULT_CONFIG):
+        changed = True
 
     # 仅移除已废弃字段，不因相对/绝对路径规范化而回写 config.json
     if "manual_local_model_counter" in cfg:
         del cfg["manual_local_model_counter"]
         changed = True
 
+    cfg["auth"] = _normalize_auth_config(cfg.get("auth"))
+    if not cfg["auth"].get("session_secret"):
+        cfg["auth"]["session_secret"] = secrets.token_hex(32)
+        changed = True
+
     # 运行时使用绝对路径，配置文件本身保留用户填写的相对路径
-    runtime_cfg = dict(cfg)
+    runtime_cfg = deepcopy(cfg)
     runtime_cfg["download_dir"] = str((BASE_DIR / cfg.get("download_dir", "data")).resolve())
     runtime_cfg["cookie_file"] = str((BASE_DIR / cfg.get("cookie_file", "cookie.txt")).resolve())
     runtime_cfg["logs_dir"] = str((BASE_DIR / cfg.get("logs_dir", "logs")).resolve())
+    runtime_cfg["token_file"] = str((BASE_DIR / cfg.get("token_file", "tokens.json")).resolve())
+    runtime_cfg["auth"] = _normalize_auth_config(cfg.get("auth"))
 
     Path(runtime_cfg["download_dir"]).mkdir(parents=True, exist_ok=True)
     Path(runtime_cfg["logs_dir"]).mkdir(parents=True, exist_ok=True)
+    Path(runtime_cfg["token_file"]).parent.mkdir(parents=True, exist_ok=True)
     if changed:
         CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return runtime_cfg
+
+
+def load_token_store(cfg: Optional[dict] = None) -> dict:
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    token_path = Path((cfg_now or {}).get("token_file") or TOKEN_STORE_PATH)
+    changed = False
+    if token_path.exists():
+        try:
+            store = json.loads(token_path.read_text(encoding="utf-8"))
+        except Exception:
+            store = deepcopy(DEFAULT_TOKEN_STORE)
+            changed = True
+    else:
+        store = deepcopy(DEFAULT_TOKEN_STORE)
+        changed = True
+    if not isinstance(store, dict):
+        store = deepcopy(DEFAULT_TOKEN_STORE)
+        changed = True
+
+    raw_tokens = store.get("tokens")
+    tokens = raw_tokens if isinstance(raw_tokens, list) else []
+    normalized = []
+    for item in tokens:
+        if not isinstance(item, dict):
+            continue
+        token_hash = str(item.get("token_hash") or "").strip()
+        if not token_hash:
+            continue
+        normalized.append({
+            "id": str(item.get("id") or uuid.uuid4().hex),
+            "name": str(item.get("name") or "API Token").strip() or "API Token",
+            "token_hash": token_hash,
+            "token_preview": str(item.get("token_preview") or "").strip(),
+            "created_at": str(item.get("created_at") or now_iso()).strip(),
+            "last_used_at": str(item.get("last_used_at") or "").strip(),
+            "revoked_at": str(item.get("revoked_at") or "").strip(),
+        })
+    if normalized != tokens:
+        changed = True
+    store = {"tokens": normalized}
+
+    if changed:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    return store
+
+
+def save_token_store(cfg: Optional[dict], store: dict):
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    token_path = Path((cfg_now or {}).get("token_file") or TOKEN_STORE_PATH)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_token_preview(token: str) -> str:
+    text = str(token or "").strip()
+    if len(text) <= 12:
+        return text
+    return f"{text[:8]}...{text[-4:]}"
+
+
+def hash_api_token(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def list_api_tokens(cfg: Optional[dict] = None) -> List[dict]:
+    store = load_token_store(cfg)
+    items = []
+    for item in store.get("tokens") or []:
+        if not isinstance(item, dict):
+            continue
+        items.append({
+            "id": str(item.get("id") or "").strip(),
+            "name": str(item.get("name") or "").strip(),
+            "token_preview": str(item.get("token_preview") or "").strip(),
+            "created_at": str(item.get("created_at") or "").strip(),
+            "last_used_at": str(item.get("last_used_at") or "").strip(),
+            "revoked_at": str(item.get("revoked_at") or "").strip(),
+            "active": not bool(str(item.get("revoked_at") or "").strip()),
+        })
+    items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return items
+
+
+def generate_api_token(name: str, cfg: Optional[dict] = None) -> dict:
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    store = load_token_store(cfg_now)
+    raw_token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(24)}"
+    created_at = now_iso()
+    entry = {
+        "id": uuid.uuid4().hex,
+        "name": str(name or "API Token").strip() or "API Token",
+        "token_hash": hash_api_token(raw_token),
+        "token_preview": build_token_preview(raw_token),
+        "created_at": created_at,
+        "last_used_at": "",
+        "revoked_at": "",
+    }
+    tokens = store.get("tokens") if isinstance(store.get("tokens"), list) else []
+    tokens.append(entry)
+    store["tokens"] = tokens
+    save_token_store(cfg_now, store)
+    result = dict(entry)
+    result["token"] = raw_token
+    result.pop("token_hash", None)
+    return result
+
+
+def revoke_api_token(token_id: str, cfg: Optional[dict] = None) -> bool:
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    store = load_token_store(cfg_now)
+    changed = False
+    token_id_text = str(token_id or "").strip()
+    for item in store.get("tokens") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip() != token_id_text:
+            continue
+        if not str(item.get("revoked_at") or "").strip():
+            item["revoked_at"] = now_iso()
+            changed = True
+        break
+    if changed:
+        save_token_store(cfg_now, store)
+    return changed
+
+
+def get_bearer_token_from_request(request: Request) -> str:
+    auth_header = str(request.headers.get("authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return str(request.headers.get("x-api-token") or "").strip()
+
+
+def validate_api_token(request: Request, cfg: Optional[dict] = None) -> Optional[dict]:
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    raw_token = get_bearer_token_from_request(request)
+    if not raw_token:
+        return None
+    token_hash = hash_api_token(raw_token)
+    store = load_token_store(cfg_now)
+    changed = False
+    matched = None
+    for item in store.get("tokens") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("revoked_at") or "").strip():
+            continue
+        saved_hash = str(item.get("token_hash") or "").strip()
+        if not saved_hash:
+            continue
+        if not hmac.compare_digest(saved_hash, token_hash):
+            continue
+        matched = item
+        last_used = parse_iso_datetime(str(item.get("last_used_at") or ""))
+        if last_used is None or (datetime.now() - last_used).total_seconds() >= TOKEN_USAGE_UPDATE_INTERVAL_SECONDS:
+            item["last_used_at"] = now_iso()
+            changed = True
+        break
+    if changed:
+        save_token_store(cfg_now, store)
+    if not matched:
+        return None
+    return {
+        "type": "token",
+        "token_id": str(matched.get("id") or "").strip(),
+        "name": str(matched.get("name") or "").strip(),
+    }
+
+
+def is_auth_enabled(cfg: Optional[dict] = None) -> bool:
+    cfg_now = cfg if isinstance(cfg, dict) else CFG
+    auth_cfg = cfg_now.get("auth") if isinstance(cfg_now, dict) else {}
+    return bool((auth_cfg or {}).get("enabled", True))
+
+
+def is_session_authenticated(request: Request) -> bool:
+    try:
+        return bool(request.session.get("user"))
+    except Exception:
+        return False
+
+
+def require_session_user(request: Request) -> str:
+    if not is_session_authenticated(request):
+        raise HTTPException(status_code=401, detail="未登录")
+    return str(request.session.get("user") or "").strip()
 
 
 def load_gallery_flags() -> dict:
@@ -1157,15 +1428,20 @@ def scan_gallery(cfg) -> List[dict]:
     return items
 
 
+CFG = load_config()
+ensure_manual_counter_file(CFG)
+
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+MANUAL_DRAFT_ROOT.mkdir(parents=True, exist_ok=True)
 app = FastAPI()
 
-# Session middleware
 app.add_middleware(
     SessionMiddleware,
-    secret_key="makerworld-secret-key",
+    secret_key=CFG["auth"]["session_secret"],
+    same_site="lax",
+    https_only=False,
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1174,132 +1450,217 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 登录验证 middleware
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
 
-    path = request.url.path
-
-    # 不需要登录的路径
-    public_paths = [
+def is_public_path(path: str) -> bool:
+    if path.startswith("/static"):
+        return True
+    return path in {
         "/login",
         "/logout",
-        "/static",
-        "/tmp"
-    ]
-
-    # 放行静态资源
-    if any(path.startswith(p) for p in public_paths):
-        return await call_next(request)
-
-    # API 必须登录
-    if path.startswith("/api"):
-        if not request.session.get("user"):
-            return JSONResponse(
-                status_code=401,
-                content={"error": "未登录"}
-            )
-
-    # 页面必须登录
-    if path in ["/", "/config"] or path.startswith("/v2"):
-        if not request.session.get("user"):
-            return RedirectResponse("/login")
-
-    return await call_next(request)
+        "/api/auth/status",
+    }
 
 
-CFG = load_config()
-ensure_manual_counter_file(CFG)
+def is_protected_page_path(path: str) -> bool:
+    return (
+        path == "/"
+        or path == "/config"
+        or path.startswith("/files")
+        or path.startswith("/tmp")
+        or path.startswith("/v2")
+    )
 
-TMP_DIR.mkdir(parents=True, exist_ok=True)
-MANUAL_DRAFT_ROOT.mkdir(parents=True, exist_ok=True)
-USERNAME = "admin"
-PASSWORD = "admin123"
 
-@app.get("/login", response_class=HTMLResponse)
-async def login_page():
-    return """
+def validate_session_login(username: str, password: str) -> bool:
+    auth_cfg = CFG.get("auth") if isinstance(CFG.get("auth"), dict) else {}
+    expected_username = str(auth_cfg.get("username") or "").strip()
+    expected_password = str(auth_cfg.get("password") or "")
+    return (
+        hmac.compare_digest(str(username or "").strip(), expected_username)
+        and hmac.compare_digest(str(password or ""), expected_password)
+    )
+
+
+def build_login_page(error_message: str = "") -> str:
+    error_html = ""
+    if error_message:
+        error_html = (
+            '<div style="margin-top:14px;padding:12px 14px;border-radius:10px;'
+            'background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:13px;">'
+            f"{escape_html(error_message)}</div>"
+        )
+    return f"""
     <html>
     <head>
-        <title>登录</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>登录 | MakerWorld Archive</title>
         <style>
-        body{
-            font-family:Arial;
-            display:flex;
-            justify-content:center;
-            align-items:center;
-            height:100vh;
-            background:#f2f2f2;
-        }
-        .box{
-            background:white;
-            padding:30px;
-            border-radius:10px;
-            width:300px;
-        }
-        input{
-            width:100%;
-            padding:10px;
-            margin-top:10px;
-        }
-        button{
-            width:100%;
-            margin-top:15px;
-            padding:10px;
-        }
+        :root {{
+            color-scheme: light;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        body {{
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background:
+              radial-gradient(circle at top left, rgba(14,165,233,.18), transparent 32%),
+              radial-gradient(circle at bottom right, rgba(34,197,94,.16), transparent 28%),
+              linear-gradient(135deg, #f8fafc, #e2e8f0);
+        }}
+        .box {{
+            width: min(100%, 380px);
+            background: rgba(255,255,255,.94);
+            border: 1px solid rgba(148,163,184,.25);
+            border-radius: 18px;
+            box-shadow: 0 20px 45px rgba(15,23,42,.14);
+            padding: 28px;
+            backdrop-filter: blur(10px);
+        }}
+        h1 {{
+            margin: 0 0 8px;
+            font-size: 24px;
+            color: #0f172a;
+        }}
+        p {{
+            margin: 0 0 18px;
+            color: #475569;
+            font-size: 14px;
+            line-height: 1.6;
+        }}
+        label {{
+            display: block;
+            margin: 12px 0 6px;
+            color: #334155;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        input {{
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #cbd5e1;
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color .2s ease, box-shadow .2s ease;
+        }}
+        input:focus {{
+            border-color: #0ea5e9;
+            box-shadow: 0 0 0 4px rgba(14,165,233,.14);
+        }}
+        button {{
+            width: 100%;
+            margin-top: 18px;
+            border: 0;
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 14px;
+            font-weight: 700;
+            color: white;
+            background: linear-gradient(135deg, #0ea5e9, #0284c7);
+            cursor: pointer;
+        }}
+        .hint {{
+            margin-top: 14px;
+            color: #64748b;
+            font-size: 12px;
+            line-height: 1.6;
+        }}
         </style>
     </head>
     <body>
         <form class="box" method="post" action="/login">
-            <h3>登录 MakerWorld Archive</h3>
-            <input name="username" placeholder="用户名"/>
-            <input name="password" type="password" placeholder="密码"/>
+            <h1>登录控制台</h1>
+            <p>公网部署时，网页访问需要先登录；API 请求需要使用已生成的 Token。</p>
+            <label for="username">用户名</label>
+            <input id="username" name="username" autocomplete="username" placeholder="请输入用户名" />
+            <label for="password">密码</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" />
             <button type="submit">登录</button>
+            {error_html}
+            <div class="hint">用户名和密码来自服务端配置文件，Token 请在登录后到“安全设置”里生成。</div>
         </form>
     </body>
     </html>
     """
 
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    if not is_auth_enabled(CFG):
+        return await call_next(request)
+
+    if is_public_path(path):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        auth_context = validate_api_token(request, CFG)
+        if auth_context is None and is_session_authenticated(request):
+            auth_context = {
+                "type": "session",
+                "username": str(request.session.get("user") or "").strip(),
+            }
+        if auth_context is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "未授权，请先登录或提供有效 Token"},
+            )
+        request.state.auth_context = auth_context
+        return await call_next(request)
+
+    if is_protected_page_path(path) and not is_session_authenticated(request):
+        return RedirectResponse("/login", status_code=302)
+
+    return await call_next(request)
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if not is_auth_enabled(CFG):
+        return RedirectResponse("/", status_code=302)
+    if is_session_authenticated(request):
+        return RedirectResponse("/", status_code=302)
+    error_message = str(request.query_params.get("error") or "").strip()
+    return HTMLResponse(build_login_page(error_message))
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-
-    if username == USERNAME and password == PASSWORD:
+    if not is_auth_enabled(CFG):
+        return RedirectResponse("/", status_code=302)
+    if validate_session_login(username, password):
         request.session["user"] = username
         return RedirectResponse("/", status_code=302)
-
-    return {"error": "login failed"}
+    return RedirectResponse("/login?error=用户名或密码错误", status_code=302)
 
 
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login")
-    
+
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/files", StaticFiles(directory=CFG["download_dir"], html=True), name="files")
 app.mount("/tmp", StaticFiles(directory=TMP_DIR), name="tmp")
 
-def check_login(request: Request):
-    if not request.session.get("user"):
-        raise HTTPException(status_code=401, detail="未登录")
-        
-import pathlib
-
-BASE_DIR = pathlib.Path(__file__).parent
-
 
 @app.get("/")
 async def gallery_page(request: Request):
-
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
-
-    # 原来的代码保持不动
+    if is_auth_enabled(CFG) and not is_session_authenticated(request):
+        return RedirectResponse("/login", status_code=302)
+    return FileResponse(BASE_DIR / "templates" / "gallery.html")
 
 
 @app.get("/config")
-async def config_page():
+async def config_page(request: Request):
+    if is_auth_enabled(CFG) and not is_session_authenticated(request):
+        return RedirectResponse("/login", status_code=302)
     return FileResponse(BASE_DIR / "templates" / "config.html")
 
 
@@ -1308,13 +1669,70 @@ async def api_config():
     cfg = load_config()
     cookie_path = Path(cfg["cookie_file"])
     cookie_time = cookie_path.stat().st_mtime if cookie_path.exists() else None
+    auth_cfg = cfg.get("auth") if isinstance(cfg.get("auth"), dict) else {}
     return {
         "download_dir": cfg["download_dir"],
         "logs_dir": cfg["logs_dir"],
         "cookie_file": cfg["cookie_file"],
+        "token_file": cfg["token_file"],
         "manual_local_model_counter": read_manual_counter(cfg),
         "cookie_updated_at": datetime.fromtimestamp(cookie_time).isoformat() if cookie_time else None,
+        "auth_enabled": bool(auth_cfg.get("enabled", True)),
+        "auth_username": str(auth_cfg.get("username") or "").strip(),
+        "token_count": len(list_api_tokens(cfg)),
     }
+
+
+@app.get("/api/auth/status")
+async def api_auth_status(request: Request):
+    logged_in = is_session_authenticated(request)
+    auth_context = getattr(request.state, "auth_context", None)
+    return {
+        "status": "ok",
+        "auth_enabled": is_auth_enabled(CFG),
+        "logged_in": logged_in,
+        "username": str(request.session.get("user") or "").strip() if logged_in else "",
+        "api_authenticated": isinstance(auth_context, dict),
+        "auth_type": str((auth_context or {}).get("type") or "").strip(),
+    }
+
+
+@app.get("/api/auth/tokens")
+async def api_auth_tokens(request: Request):
+    require_session_user(request)
+    return {
+        "status": "ok",
+        "tokens": list_api_tokens(CFG),
+    }
+
+
+@app.post("/api/auth/tokens")
+async def api_create_auth_token(request: Request, body: dict):
+    require_session_user(request)
+    payload = body or {}
+    name = str(payload.get("name") or "").strip() or "API Token"
+    created = generate_api_token(name, CFG)
+    return {
+        "status": "ok",
+        "token": created.get("token"),
+        "item": {
+            "id": created.get("id"),
+            "name": created.get("name"),
+            "token_preview": created.get("token_preview"),
+            "created_at": created.get("created_at"),
+            "last_used_at": created.get("last_used_at"),
+            "revoked_at": created.get("revoked_at"),
+            "active": True,
+        },
+    }
+
+
+@app.delete("/api/auth/tokens/{token_id}")
+async def api_delete_auth_token(request: Request, token_id: str):
+    require_session_user(request)
+    if not revoke_api_token(token_id, CFG):
+        raise HTTPException(404, "Token 不存在")
+    return {"status": "ok", "revoked_at": now_iso()}
 
 
 @app.post("/api/cookie")

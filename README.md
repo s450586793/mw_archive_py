@@ -20,6 +20,8 @@
 - 缺失 3MF 记录与重试下载
 - 模型库页面支持收藏、打印状态、手动导入、附件管理
 - Chrome 插件与油猴脚本支持一键归档流程
+- 支持公网部署下的单用户登录保护
+- 支持 API Token 生成、撤销与 Bearer 鉴权
 
 ## 项目结构
 ```text
@@ -29,6 +31,7 @@ mw_archive/
 │  ├─ server.py
 │  ├─ config.json
 │  ├─ cookie.txt
+│  ├─ tokens.json
 │  ├─ data/
 │  ├─ logs/
 │  ├─ static/
@@ -73,7 +76,7 @@ python server.py
 - 配置页：`http://127.0.0.1:8000/config`
 
 ## Docker 启动
-在当前目录下，**先创建 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**
+在当前目录下，**先创建 `app/data`、`app/logs` 目录，以及 `app/config.json`、`app/tokens.json`、`app/cookie.txt` 文件**
 
 > 注: logs和cookie.txt不是必须的，可以不挂载
 
@@ -84,11 +87,13 @@ docker run -d \
   -p 8000:8000 \
   -v $PWD/app/data:/app/data \
   -v $PWD/app/logs:/app/logs \
+  -v $PWD/app/config.json:/app/config.json \
+  -v $PWD/app/tokens.json:/app/tokens.json \
   -v $PWD/app/cookie.txt:/app/cookie.txt \
-  sonicming/mw-archiver:latest
+  ghcr.io/s450586793/mw-archiver:latest
 ```
 
-如果网络问题可以更换镜像源 `docker.1ms.run/sonicming/mw-archiver:latest`
+如果网络问题可以先在 GitHub Actions 完成镜像构建后，从 `ghcr.io/s450586793/mw-archiver:latest` 拉取。
 
 ```bash
 # 本地构建
@@ -99,6 +104,8 @@ docker run -d \
   -p 8000:8000 \
   -v $PWD/app/data:/app/data \
   -v $PWD/app/logs:/app/logs \
+  -v $PWD/app/config.json:/app/config.json \
+  -v $PWD/app/tokens.json:/app/tokens.json \
   -v $PWD/app/cookie.txt:/app/cookie.txt \
   mw-archiver
 ```
@@ -110,32 +117,36 @@ docker run -d \
 * **`-p 8000:8000`**：端口映射，格式为 `宿主机端口:容器内端口`。将容器内部的 `8000` 端口映射给宿主机的 `8000` 端口，启动后即可通过 `http://localhost:8000` 访问网页服务。
 * **`-v $PWD/app/data:/app/data`**：数据目录映射（Volume）。将宿主机当前目录下的 `app/data` 挂载到容器内的 `/app/data`，使得所有归档下载的模型（3MF 文件、图片等数据）持久化保存在宿主机中，**防止容器重启或重建时数据丢失**。
 * **`-v $PWD/app/logs:/app/logs`**(非必须)：日志目录映射。将运行日志和错误信息（如缺失 3MF 的记录日志）保存到宿主机，方便排查使用。
+* **`-v $PWD/app/config.json:/app/config.json`**：登录配置文件映射。公网部署时建议持久化，保存登录账号、密码和 session secret。
+* **`-v $PWD/app/tokens.json:/app/tokens.json`**：API Token 存储映射。通过页面生成的 Token 会写入此文件，未挂载时重建容器会丢失。
 * **`-v $PWD/app/cookie.txt:/app/cookie.txt`**(非必须)：Cookie 凭证文件映射。此文件用于 MakerWorld 下载模型所需的认证信息。挂载出来便于配置持久化（即使在网页后端自动更新或重写了它的内容，宿主机上的文件也会同步更新）。*[注意：在首次执行 docker run 之前，如果 `app/cookie.txt` 在宿主机不存在，可能会被 Docker 错误识别并创建为目录，可以先在本地执行 `touch app/cookie.txt` 创建空文件]*。
-* **`sonicming/mw-archiver:latest`**：启动使用的 Docker 镜像名称以及对应的版本标签（latest）。
+* **`ghcr.io/s450586793/mw-archiver:latest`**：启动使用的 Docker 镜像名称以及对应的版本标签（latest）。
 
 ## Docker Compose 启动
 
-创建 `docker-compose.yml` 文件：
+可以直接参考仓库里的 [docker-compose.example.yml](docker-compose.example.yml)；如果你要手写，内容如下：
 
-> 注: logs和cookie.txt不是必须的，可以不挂载
+> 注: `logs`、`config.json`、`tokens.json`、`cookie.txt` 都建议挂载，尤其是公网部署。
 
 ```yaml
 version: '3.8'
 
 services:
   mw-archiver:
-    image: sonicming/mw-archiver:latest
+    image: ghcr.io/s450586793/mw-archiver:latest
     container_name: mw-archiver
     ports:
       - "8000:8000"
     volumes:
       - ./app/data:/app/data
       - ./app/logs:/app/logs
+      - ./app/config.json:/app/config.json
+      - ./app/tokens.json:/app/tokens.json
       - ./app/cookie.txt:/app/cookie.txt
     restart: unless-stopped
 ```
 
-在同级目录下，**确保已经创建了 `app/data`、`app/logs` 目录和 `app/cookie.txt` 空文件**，然后执行以下命令将服务放置在后台启动：
+在同级目录下，**确保已经创建了 `app/data`、`app/logs` 目录，以及 `app/config.json`、`app/tokens.json`、`app/cookie.txt` 文件**，然后执行以下命令将服务放置在后台启动：
 
 ```bash
 docker-compose up -d
@@ -152,9 +163,21 @@ docker-compose up -d
 {
   "download_dir": "./data",
   "cookie_file": "./cookie.txt",
-  "logs_dir": "./logs"
+  "logs_dir": "./logs",
+  "token_file": "./tokens.json",
+  "auth": {
+    "enabled": true,
+    "username": "your-admin",
+    "password": "your-password",
+    "session_secret": "change-this-random-secret"
+  }
 }
 ```
+
+说明：
+- `username` / `password` 用于网页登录
+- `session_secret` 用于签发登录会话，公网部署必须改成随机值
+- API Token 不写在 `config.json`，而是登录后在 `/config` 的“安全设置”页面生成，存到 `tokens.json`
 
 ### 完整cookie获取
 随便打开一个模型，按f12，选择network，然后刷新页面，找到请求，复制cookie
@@ -173,10 +196,11 @@ docker-compose up -d
 ## 常用流程
 http://127.0.0.1:8000
 1. 在 `/config` 设置 Cookie（或调用 `POST /api/cookie`）。
-2. 在 `/config` 输入模型链接执行归档（或调用 `POST /api/archive`）。
-3. 若同模型再次归档，系统自动执行更新。
-4. 归档历史样式升级时，点击“归档修复”中的“一键更新历史归档”或调用 `POST /api/archive/rebuild-pages`。
-5. 在 `/` 模型库查看、筛选、标记和打开本地模型页面。
+2. 公网部署时先访问 `/login` 登录，再到 `/config` 的“安全设置”生成 API Token。
+3. 在 `/config` 输入模型链接执行归档（或调用 `POST /api/archive`，请求头带 `Authorization: Bearer <token>`）。
+4. 若同模型再次归档，系统自动执行更新。
+5. 归档历史样式升级时，点击“归档修复”中的“一键更新历史归档”或调用 `POST /api/archive/rebuild-pages`。
+6. 在 `/` 模型库查看、筛选、标记和打开本地模型页面。
 
 注: 为减少触发验证,目前只能一次归档一个模型.
 
@@ -184,6 +208,10 @@ http://127.0.0.1:8000
 > 详细的接口、传参示例和返回说明，请参见完整的 [API 接口文档 (doc/api.md)](doc/readme/api.md)
 
 - `GET /api/config`
+- `GET /api/auth/status`
+- `GET /api/auth/tokens`
+- `POST /api/auth/tokens`
+- `DELETE /api/auth/tokens/{token_id}`
 - `POST /api/cookie`
 - `POST /api/archive`
 - `POST /api/archive/rebuild-pages`
@@ -208,12 +236,12 @@ http://127.0.0.1:8000
 
 ## 插件说明
 Chrome 插件：
-- 一键归档，快速更新cookie(不完整,建议还是手动更新)
+- 一键归档，快速更新 Cookie，支持配置 API Token
 - 目录：`plugin/chrome_extension/mw_quick_archive_ext`
 - 说明：[plugin/chrome_extension/使用说明.md](plugin/chrome_extension/使用说明.md)
 
 油猴脚本：
-- 一键归档，手动更新cookie
+- 一键归档，手动更新 Cookie，支持配置 API Token
 - 文件：`plugin/tampermonkey/mw_quick_archive.user.js`
 - 说明：[plugin/tampermonkey/使用说明.md](plugin/tampermonkey/使用说明.md)
 - 直接安装插件地址 [地址](https://github.com/sonicmingit/mw_archive_py/raw/refs/heads/main/plugin/tampermonkey/mw_quick_archive.user.js)

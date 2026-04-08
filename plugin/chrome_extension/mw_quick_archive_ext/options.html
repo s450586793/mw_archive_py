@@ -9,9 +9,11 @@
 <body>
   <main class="wrap">
     <h1>MakerWorld 归档助手 - 配置</h1>
-    <p class="desc">配置后端 API 地址（例如 <code>http://127.0.0.1:8000</code>）</p>
+    <p class="desc">配置后端 API 地址与 API Token（公网部署时 Token 必填）</p>
     <label for="apiBase">后端 API 地址</label>
     <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
+    <label for="apiToken">API Token（公网部署必填）</label>
+    <input id="apiToken" type="text" placeholder="mwat_xxx" />
     <div class="row">
       <button id="saveBtn">保存</button>
       <button id="syncCookieBtn">同步 Cookie</button>
