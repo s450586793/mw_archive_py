@@ -812,6 +812,45 @@ def _set_page_query(url: str, page: int) -> str:
     return urlunparse(parsed._replace(query=urlencode(items, doseq=True)))
 
 
+def _set_query_param(url: str, key: str, value: Any, extra_pairs: Optional[List[tuple[str, Any]]] = None) -> str:
+    parsed = urlparse(str(url or "").strip())
+    drop_keys = {str(key or "").lower()}
+    for extra_key, _extra_value in extra_pairs or []:
+        drop_keys.add(str(extra_key or "").lower())
+    items = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if str(k or "").lower() not in drop_keys]
+    items.append((str(key or ""), str(value)))
+    for extra_key, extra_value in extra_pairs or []:
+        items.append((str(extra_key or ""), str(extra_value)))
+    return urlunparse(parsed._replace(query=urlencode(items, doseq=True)))
+
+
+def _build_batch_page_candidates(source_url: str, page: int, page_size_hint: int) -> List[str]:
+    if page <= 1:
+        return [source_url]
+    page_num = max(int(page or 1), 1)
+    size = max(int(page_size_hint or 0), 1)
+    offset = max((page_num - 1) * size, 0)
+    candidates = [
+        _set_page_query(source_url, page_num),
+        _set_query_param(source_url, "p", page_num),
+        _set_query_param(source_url, "offset", offset),
+        _set_query_param(source_url, "offset", offset, [("limit", size)]),
+        _set_query_param(source_url, "skip", offset),
+        _set_query_param(source_url, "start", offset),
+        _set_query_param(source_url, "cursor", offset),
+        _set_query_param(source_url, "cursor", offset, [("limit", size)]),
+    ]
+    unique_urls: List[str] = []
+    seen_urls: set[str] = set()
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in seen_urls:
+            continue
+        seen_urls.add(candidate)
+        unique_urls.append(candidate)
+    return unique_urls
+
+
 def _build_archive_http_session(raw_cookie: str) -> requests.Session:
     session = requests.Session()
     session.headers.update(
@@ -835,10 +874,10 @@ def _resolve_batch_model_urls_with_cookie(source_url: str, raw_cookie: str, prog
     seen: set[str] = set()
     pages_fetched = 0
     page_count_hint = 0
+    page_size_hint = 0
     max_pages = 20
 
     for page in range(1, max_pages + 1):
-        page_url = source if page == 1 else _set_page_query(source, page)
         if callable(progress_callback):
             progress_callback(
                 {
@@ -847,28 +886,50 @@ def _resolve_batch_model_urls_with_cookie(source_url: str, raw_cookie: str, prog
                     "phase": "discovering",
                 }
             )
-        html_text = fetch_html_with_requests(session, page_url, raw_cookie)
-        if not html_text:
-            html_text = fetch_html_with_curl(page_url, raw_cookie)
-        elif "__NEXT_DATA__" not in html_text and "__NUXT__" not in html_text:
-            html_text = fetch_html_with_curl(page_url, raw_cookie)
-        if _is_cloudflare_block_page(html_text):
-            raise RuntimeError("列表页被 Cloudflare 验证拦截，请更新 Cookie（含 cf_clearance）后重试")
+        page_candidates = _build_batch_page_candidates(source, page, page_size_hint or len(all_urls) or 20)
+        best_candidate_url = page_candidates[0]
+        best_page_urls: List[str] = []
+        best_new_count = -1
+        best_html_text = ""
 
-        page_urls = _extract_model_urls_from_html(html_text, page_url)
+        for page_url in page_candidates:
+            html_text = fetch_html_with_requests(session, page_url, raw_cookie)
+            if not html_text:
+                html_text = fetch_html_with_curl(page_url, raw_cookie)
+            elif "__NEXT_DATA__" not in html_text and "__NUXT__" not in html_text:
+                html_text = fetch_html_with_curl(page_url, raw_cookie)
+            if _is_cloudflare_block_page(html_text):
+                raise RuntimeError("列表页被 Cloudflare 验证拦截，请更新 Cookie（含 cf_clearance）后重试")
+
+            page_urls = _extract_model_urls_from_html(html_text, page_url)
+            new_count = sum(1 for item in page_urls if item not in seen)
+            if new_count > best_new_count or (new_count == best_new_count and len(page_urls) > len(best_page_urls)):
+                best_candidate_url = page_url
+                best_page_urls = page_urls
+                best_new_count = new_count
+                best_html_text = html_text
+            if page == 1 and page_urls:
+                break
+
+        page_url = best_candidate_url
+        html_text = best_html_text
+        page_urls = best_page_urls
         if page == 1:
             page_count_hint = _extract_page_count_hint(html_text)
+            page_size_hint = max(len(page_urls), 1)
         pages_fetched = page
         before_count = len(all_urls)
         _append_unique_urls(all_urls, page_urls, seen)
         new_count = len(all_urls) - before_count
         logger.info(
-            "批量列表解析 page=%s page_url=%s page_models=%s discovered_total=%s page_hint=%s",
+            "批量列表解析 page=%s page_url=%s page_models=%s discovered_total=%s new_models=%s page_hint=%s page_size_hint=%s",
             page,
             page_url,
             len(page_urls),
             len(all_urls),
+            new_count,
             page_count_hint,
+            page_size_hint,
         )
 
         if page_count_hint and page >= page_count_hint:
