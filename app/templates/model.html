@@ -20,7 +20,7 @@
     <link rel="icon" type="image/png" href="/static/imgs/fav.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="/static/css/variables.css">
-    <link rel="stylesheet" href="/static/css/model.css?v=2.8">
+    <link rel="stylesheet" href="/static/css/model.css?v=3.0">
 </head>
 
 <body>
@@ -61,11 +61,14 @@
                             <i class="fas fa-layer-group"></i>
                             <span>打印配置</span>
                         </div>
+                        <span class="section-count" id="instancesCount"></span>
                     </div>
                     <div class="instance-admin hidden" id="instanceAdminBar">
                         <button class="inst-admin-btn primary" type="button" id="instanceImportOpenBtn"><i class="fas fa-plus"></i> 添加打印配置</button>
                     </div>
+                    <div class="instance-filter-strip" id="instanceFilterStrip"></div>
                     <div class="instances" id="instanceList"></div>
+                    <div class="instances-primary-action" id="instancesPrimaryAction"></div>
                 </div>
 
                 <!-- 简介区 -->
@@ -136,20 +139,28 @@
             <div class="layout-side">
                 <!-- 最上方: 基本信息块 (移动端 order 1) -->
                 <div class="info-section card-block">
-                    <h1 class="title" id="titleSection"></h1>
-                    <div class="download-warning hidden" id="downloadWarning"></div>
-                    <div class="author" id="authorSection"></div>
-                    <div class="source-badge hidden" id="sourceBadge"></div>
-                    <div class="collect-date" id="collectDate"></div>
-                    <div class="meta-extra hidden" id="metaExtraList"></div>
-                    <div class="info-actions">
-                        <button class="inst-admin-btn model-edit-open-btn" type="button" id="modelEditOpenBtn">
-                            <i class="fas fa-pen"></i> 编辑归档
-                        </button>
-                        <button class="inst-admin-btn model-path-copy-btn" type="button" id="modelPathCopyBtn">
-                            <i class="fas fa-copy"></i> 模型路径
-                        </button>
-                        <div class="info-toolbar__msg" id="modelEditMsg"></div>
+                    <div class="info-overview">
+                        <div class="info-overview__main">
+                            <div class="author" id="authorSection"></div>
+                            <h1 class="title" id="titleSection"></h1>
+                            <div class="download-warning hidden" id="downloadWarning"></div>
+                        </div>
+                        <div class="info-overview__side">
+                            <div class="meta-extra hidden" id="metaExtraList"></div>
+                            <div class="info-overview__line">
+                                <div class="source-badge hidden" id="sourceBadge"></div>
+                                <div class="collect-date" id="collectDate"></div>
+                            </div>
+                            <div class="info-actions">
+                                <button class="inst-admin-btn model-edit-open-btn" type="button" id="modelEditOpenBtn">
+                                    <i class="fas fa-pen"></i> 编辑归档
+                                </button>
+                                <button class="inst-admin-btn model-path-copy-btn" type="button" id="modelPathCopyBtn">
+                                    <i class="fas fa-copy"></i> 模型路径
+                                </button>
+                                <div class="info-toolbar__msg" id="modelEditMsg"></div>
+                            </div>
+                        </div>
                     </div>
                     <div id="statsSection"></div>
                 </div>
@@ -308,7 +319,7 @@
     </div>
 
     <script src="/static/js/theme.js?v=5.1.2"></script>
-    <script src="/static/js/model.js?v=2.9"></script>
+    <script src="/static/js/model.js?v=3.0"></script>
 </body>
 
 </html>

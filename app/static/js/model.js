@@ -363,6 +363,8 @@
 
     var MODEL_DIR = '';
     var CURRENT_META = null;
+    var GALLERY_STATE = { items: [], index: 0 };
+    var INSTANCE_STATE = { items: [], activeIndex: 0 };
     var OFFLINE_API_BASE_KEY = 'mw_offline_api_base';
     var DEFAULT_OFFLINE_API_BASE = 'http://127.0.0.1:8000';
 
@@ -581,6 +583,82 @@
         }
     }
 
+    function shortenText(value, limit) {
+        var text = String(value || '').trim();
+        if (!text || text.length <= limit) return text;
+        return text.slice(0, Math.max(0, limit - 1)) + '…';
+    }
+
+    function buildGalleryItems(meta, images) {
+        var out = [];
+        var seen = Object.create(null);
+
+        function push(relPath, alt) {
+            var rel = String(relPath || '').trim();
+            if (!rel || seen[rel]) return;
+            seen[rel] = true;
+            out.push({
+                relPath: rel,
+                alt: alt || meta.title || '模型图片'
+            });
+        }
+
+        if (images.cover) push('images/' + images.cover, meta.title || '封面图');
+        (images.design || []).forEach(function (name) {
+            push('images/' + name, meta.title || '设计图');
+        });
+        if (!out.length) push('screenshot.png', meta.title || '模型截图');
+        return out;
+    }
+
+    function updateHeroSelection() {
+        var hero = document.getElementById('heroImage');
+        var counter = document.getElementById('heroCounter');
+        var items = GALLERY_STATE.items || [];
+        if (!hero) return;
+        if (!items.length) {
+            hero.classList.add('hidden');
+            hero.removeAttribute('src');
+            if (counter) counter.textContent = '';
+            return;
+        }
+
+        var index = GALLERY_STATE.index || 0;
+        if (index < 0) index = 0;
+        if (index >= items.length) index = 0;
+        GALLERY_STATE.index = index;
+
+        var item = items[index];
+        hero.classList.remove('hidden');
+        hero.classList.add('zoomable');
+        hero.alt = item.alt || '模型图片';
+        hero.src = fileUrl(MODEL_DIR, item.relPath);
+        hero.onerror = function () {
+            if (item.relPath === 'screenshot.png') {
+                this.onerror = null;
+                return;
+            }
+            this.onerror = null;
+            this.src = fileUrl(MODEL_DIR, 'screenshot.png');
+        };
+
+        Array.from(document.querySelectorAll('#designThumbs [data-idx]')).forEach(function (node) {
+            var idx = Number(node.getAttribute('data-idx') || 0);
+            node.classList.toggle('active', idx === index);
+        });
+
+        if (counter) {
+            counter.textContent = (index + 1) + ' / ' + items.length;
+        }
+    }
+
+    function moveHero(delta) {
+        var items = GALLERY_STATE.items || [];
+        if (items.length <= 1) return;
+        GALLERY_STATE.index = (GALLERY_STATE.index + delta + items.length) % items.length;
+        updateHeroSelection();
+    }
+
     function renderAuthor(meta) {
         var author = normalizeAuthor(meta);
         var el = document.getElementById('authorSection');
@@ -588,38 +666,23 @@
         if (author.avatar) {
             html += '<img class="avatar" src="' + fileUrl(MODEL_DIR, author.avatar) + '" alt="avatar">';
         }
-        html += '作者：';
+        html += '<div class="author-meta">';
+        html += '<span class="author-label">作者</span>';
         if (author.url) {
-            html += '<a href="' + esc(author.url) + '" target="_blank" rel="noreferrer">' + esc(author.name) + '</a>';
+            html += '<a class="author-name" href="' + esc(author.url) + '" target="_blank" rel="noreferrer">' + esc(author.name) + '</a>';
         } else {
-            html += esc(author.name);
+            html += '<span class="author-name">' + esc(author.name) + '</span>';
         }
+        html += '</div>';
         el.innerHTML = html;
     }
 
     function renderHero(meta, images) {
-        var el = document.getElementById('heroImage');
-        // 优先 screenshot, 然后 cover, 然后第一张 design
-        var src = '';
-        // 尝试 screenshot（可能是 .png .jpg .webp）
-        var exts = ['png', 'jpg', 'jpeg', 'webp'];
-        for (var i = 0; i < exts.length; i++) {
-            // 我们先构建 URL，后面 onerror 处理
-            if (i === 0) src = fileUrl(MODEL_DIR, 'screenshot.png');
+        GALLERY_STATE.items = buildGalleryItems(meta, images);
+        if (GALLERY_STATE.index >= GALLERY_STATE.items.length) {
+            GALLERY_STATE.index = 0;
         }
-        if (images.cover) {
-            // 用 cover 作为 fallback
-            el.onerror = function () {
-                this.onerror = null;
-                this.src = fileUrl(MODEL_DIR, 'images/' + images.cover);
-            };
-        } else if (images.design.length) {
-            el.onerror = function () {
-                this.onerror = null;
-                this.src = fileUrl(MODEL_DIR, 'images/' + images.design[0]);
-            };
-        }
-        el.src = src;
+        updateHeroSelection();
     }
 
     function renderCollectDate(meta) {
@@ -788,7 +851,7 @@
 
     // ============ 实例卡片 ============
 
-    function buildInstanceHtml(inst, baseName) {
+    function getInstanceViewModel(inst, baseName) {
         var title = inst.title || inst.name || '实例 ' + (inst.id || '');
         var publish = formatDate(inst.publishTime || '');
         var summary = inst.summary || '';
@@ -801,6 +864,16 @@
         var plateCnt = plates.length;
         var pictures = inst.pictures || [];
         var filaments = inst.instanceFilaments || [];
+        var coverRel = '';
+
+        if (pictures.length) {
+            var pictureName = stripPrefix(toName((pictures[0] && (pictures[0].relPath || pictures[0].localPath || pictures[0].fileName)) || ''), baseName);
+            if (pictureName) coverRel = 'images/' + pictureName;
+        }
+        if (!coverRel && plates.length) {
+            var plateName = stripPrefix(toName((plates[0] && (plates[0].thumbnailRelPath || plates[0].thumbnailFile)) || ''), baseName);
+            if (plateName) coverRel = 'images/' + plateName;
+        }
 
         var isFileProtocol = location.protocol === 'file:';
         var isOfflineMetaPage = !isFileProtocol && !!window.__OFFLINE_META__;
@@ -918,103 +991,178 @@
             if (imgs.length) picsHtml = '<div class="thumbs" style="padding:0;background:transparent;">' + imgs.join('') + '</div>';
         }
 
-        // 统计（others 来源隐藏）
-        var statsHtml = '<div class="inst-meta">' +
-            '<span class="meta-item" title="下载次数"><i class="fas fa-download"></i> ' + dls + '</span>' +
-            '<span class="meta-item" title="打印次数"><i class="fas fa-print"></i> ' + prints + '</span>' +
-            '<span class="meta-item" title="预计打印时间"><i class="far fa-clock"></i> ' + timeStr + '</span>' +
-            '<span class="meta-item" title="重量"><i class="fas fa-weight-hanging"></i> ' + weight + ' g</span>' +
-            '</div>';
+        return {
+            title: title,
+            publish: publish,
+            summary: summary,
+            downloads: dls,
+            prints: prints,
+            weight: weight,
+            predictionText: timeStr,
+            platesCount: plateCnt,
+            picturesHtml: picsHtml,
+            chipsHtml: chipsHtml,
+            coverUrl: coverRel ? fileUrl(MODEL_DIR, coverRel) : '',
+            platesDataHtml: platesDataHtml,
+            dlHrefLocal: dlHrefLocal,
+            showBambuButton: showBambuButton,
+            bambuProxyUrlAbs: bambuProxyUrlAbs,
+            fileName: fileName
+        };
+    }
 
-        return '<div class="inst-card">' +
+    function buildInstanceHtml(inst, baseName, index, active) {
+        var vm = getInstanceViewModel(inst, baseName);
+        var metaHtml = [
+            vm.predictionText ? '<span class="meta-item" title="预计打印时间"><i class="far fa-clock"></i> ' + esc(vm.predictionText) + '</span>' : '',
+            vm.platesCount ? '<span class="meta-item" title="盘数"><i class="far fa-clone"></i> ' + esc(String(vm.platesCount)) + ' 盘</span>' : '',
+            vm.downloads ? '<span class="meta-item" title="下载次数"><i class="fas fa-download"></i> ' + esc(String(vm.downloads)) + '</span>' : '',
+            vm.prints ? '<span class="meta-item" title="打印次数"><i class="fas fa-print"></i> ' + esc(String(vm.prints)) + '</span>' : '',
+            vm.weight ? '<span class="meta-item" title="重量"><i class="fas fa-weight-hanging"></i> ' + esc(String(vm.weight)) + ' g</span>' : ''
+        ].filter(Boolean).join('');
+        var tools = [];
+        if (vm.platesDataHtml) {
+            tools.push('<button class="inst-mini-btn" type="button" onclick="event.stopPropagation();openPlatesModal(this)" data-plates="' + vm.platesDataHtml + '"><i class="fas fa-layer-group"></i> 分盘</button>');
+        }
+        if (vm.fileName) {
+            tools.push('<span class="inst-file-name">' + esc(vm.fileName) + '</span>');
+        }
+        return '<article class="inst-card' + (active ? ' is-active' : '') + '" data-instance-index="' + index + '" tabindex="0" role="button">' +
             '<div class="inst-header">' +
+            (vm.coverUrl ? '<img class="inst-cover" src="' + vm.coverUrl + '" alt="' + esc(vm.title) + '">' : '<div class="inst-cover inst-cover--placeholder"><i class="fas fa-cube"></i></div>') +
             '<div class="inst-title-area">' +
-            '<strong>' + esc(title) + '</strong>' +
-            '<span class="inst-publish">' + (publish ? publish : '') +
-            (plateCnt ? '<span class="meta-badge" style="margin-left:8px;"><i class="fas fa-puzzle-piece"></i> ' + plateCnt + ' 盘</span>' : '') +
-            '</span>' +
+            '<div class="inst-title-row"><strong>' + esc(vm.title) + '</strong>' + (active ? '<span class="inst-selected-chip">已选</span>' : '') + '</div>' +
+            (vm.summary ? '<div class="inst-summary">' + esc(shortenText(vm.summary, 96)) + '</div>' : '') +
+            (metaHtml ? '<div class="inst-meta">' + metaHtml + '</div>' : '') +
+            (vm.publish ? '<div class="inst-publish">发布于 ' + esc(vm.publish) + '</div>' : '') +
+            (tools.length ? '<div class="inst-tools">' + tools.join('') + '</div>' : '') +
             '</div>' +
-            (dlHrefLocal ? '<div class="inst-actions">' +
-                (platesDataHtml ? '<button class="inst-btn inst-details" onclick="openPlatesModal(this)" data-plates="' + platesDataHtml + '"><i class="fas fa-list"></i> 详情</button>' : '') +
-                (showBambuButton ? '<a class="inst-btn inst-bambu" href="bambustudio://open?file=' + encodeURIComponent(bambuProxyUrlAbs) + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> 打印</a>' : '') +
-                '<a class="inst-btn inst-local" href="' + dlHrefLocal + '" target="_blank" rel="noreferrer" title="下载资源"><i class="fas fa-download"></i> 下载</a>' +
-                '</div>' : '') +
             '</div>' +
-            statsHtml +
-            chipsHtml +
-            picsHtml +
-            (summary ? '<div style="margin-top:12px;font-size:13px;color:var(--text-secondary);">' + summary + '</div>' : '') +
-            '</div>';
+            '</article>';
+    }
+
+    function renderInstancePrimaryAction(meta) {
+        var el = document.getElementById('instancesPrimaryAction');
+        if (!el) return;
+        var instances = INSTANCE_STATE.items || [];
+        var activeIndex = INSTANCE_STATE.activeIndex || 0;
+        var inst = instances[activeIndex];
+        if (!inst) {
+            el.innerHTML = '';
+            return;
+        }
+        var vm = getInstanceViewModel(inst, meta.baseName);
+        var mainAction = vm.dlHrefLocal
+            ? '<a class="inst-btn inst-btn--primary" href="' + vm.dlHrefLocal + '" target="_blank" rel="noreferrer"><i class="fas fa-download"></i> 下载 3MF</a>'
+            : '';
+        var sub = [];
+        if (vm.showBambuButton && vm.bambuProxyUrlAbs) {
+            sub.push('<a class="inst-btn inst-btn--secondary inst-bambu" href="bambustudio://open?file=' + encodeURIComponent(vm.bambuProxyUrlAbs) + '" title="在 Bambu Studio 中打开"><i class="fas fa-cube"></i> Bambu 打印</a>');
+        }
+        if (vm.platesDataHtml) {
+            sub.push('<button class="inst-btn inst-btn--secondary" type="button" onclick="openPlatesModal(this)" data-plates="' + vm.platesDataHtml + '"><i class="fas fa-layer-group"></i> 查看分盘</button>');
+        }
+        el.innerHTML = mainAction + (sub.length ? '<div class="instances-secondary-actions">' + sub.join('') + '</div>' : '');
     }
 
     function renderInstances(meta) {
-        var instances = meta.instances || [];
+        var instances = Array.isArray(meta.instances) ? meta.instances : [];
         var el = document.getElementById('instanceList');
-        if (!instances.length) { el.innerHTML = ''; return; }
-        el.innerHTML = instances.map(function (inst) {
-            return buildInstanceHtml(inst, meta.baseName);
-        }).join('\n');
+        var countEl = document.getElementById('instancesCount');
+        var stripEl = document.getElementById('instanceFilterStrip');
+        if (countEl) countEl.textContent = instances.length ? '(' + instances.length + ')' : '';
+        if (!instances.length) {
+            if (el) el.innerHTML = '<div class="section-empty">当前模型没有可用的打印配置</div>';
+            if (stripEl) stripEl.innerHTML = '';
+            renderInstancePrimaryAction(meta);
+            return;
+        }
+
+        INSTANCE_STATE.items = instances.slice();
+        if (INSTANCE_STATE.activeIndex >= instances.length || INSTANCE_STATE.activeIndex < 0) {
+            INSTANCE_STATE.activeIndex = 0;
+        }
+
+        if (stripEl) {
+            var chips = ['<button class="instance-filter-chip' + (INSTANCE_STATE.activeIndex === 0 ? ' is-active' : '') + '" type="button" data-instance-chip="0">全部</button>'];
+            instances.forEach(function (inst, idx) {
+                chips.push('<button class="instance-filter-chip' + (INSTANCE_STATE.activeIndex === idx && idx !== 0 ? ' is-active' : '') + '" type="button" data-instance-chip="' + idx + '">' + esc(shortenText(inst.title || inst.name || ('配置 ' + (idx + 1)), 14)) + '</button>');
+            });
+            stripEl.innerHTML = chips.join('');
+            Array.from(stripEl.querySelectorAll('[data-instance-chip]')).forEach(function (node) {
+                node.addEventListener('click', function () {
+                    var idx = Number(this.getAttribute('data-instance-chip') || 0);
+                    if (idx < 0 || idx >= instances.length) idx = 0;
+                    INSTANCE_STATE.activeIndex = idx;
+                    renderInstances(meta);
+                });
+            });
+        }
+
+        if (el) {
+            el.innerHTML = instances.map(function (inst, idx) {
+                return buildInstanceHtml(inst, meta.baseName, idx, idx === INSTANCE_STATE.activeIndex);
+            }).join('\n');
+            Array.from(el.querySelectorAll('.inst-card[data-instance-index]')).forEach(function (card) {
+                function activateCard() {
+                    var idx = Number(card.getAttribute('data-instance-index') || 0);
+                    if (idx < 0 || idx >= instances.length) return;
+                    INSTANCE_STATE.activeIndex = idx;
+                    renderInstances(meta);
+                }
+                card.addEventListener('click', activateCard);
+                card.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        activateCard();
+                    }
+                });
+            });
+        }
+
+        renderInstancePrimaryAction(meta);
     }
 
     // ============ 设计图轮播 ============
 
-    function renderCarousel(images) {
-        var designImgs = images.design || [];
+    function renderCarousel() {
+        var designImgs = GALLERY_STATE.items || [];
         var el = document.getElementById('carouselSection');
         if (!designImgs.length) { el.innerHTML = ''; return; }
 
-        var imgTags = designImgs.map(function (fn) {
-            return '<img src="' + fileUrl(MODEL_DIR, 'images/' + fn) + '" alt="design image">';
-        }).join('\n');
-
-        var thumbTags = designImgs.map(function (fn, i) {
-            return '<img data-idx="' + i + '" src="' + fileUrl(MODEL_DIR, 'images/' + fn) + '" alt="thumb ' + (i + 1) + '">';
+        var thumbTags = designImgs.map(function (item, i) {
+            return '<button class="hero-thumb' + (i === GALLERY_STATE.index ? ' active' : '') + '" type="button" data-idx="' + i + '">' +
+                '<img src="' + fileUrl(MODEL_DIR, item.relPath) + '" alt="thumb ' + (i + 1) + '">' +
+                '</button>';
         }).join('\n');
 
         el.innerHTML =
-            '<div class="carousel" id="designCarousel">' +
-            '<div class="carousel-track">' + imgTags + '</div>' +
-            '<button class="carousel-btn prev" type="button">◀</button>' +
-            '<button class="carousel-btn next" type="button">▶</button>' +
+            '<div class="hero-controls">' +
+            (designImgs.length > 1 ? '<button class="hero-nav-btn hero-nav-btn--prev" type="button" id="heroPrevBtn"><i class="fas fa-chevron-left"></i></button>' : '') +
+            '<div class="hero-counter" id="heroCounter"></div>' +
+            (designImgs.length > 1 ? '<button class="hero-nav-btn hero-nav-btn--next" type="button" id="heroNextBtn"><i class="fas fa-chevron-right"></i></button>' : '') +
             '</div>' +
             '<div class="thumbs" id="designThumbs">' + thumbTags + '</div>';
 
         initCarousel();
+        updateHeroSelection();
     }
 
     function initCarousel() {
-        var carousel = document.getElementById('designCarousel');
-        if (!carousel) return;
-        var track = carousel.querySelector('.carousel-track');
-        var slides = carousel.querySelectorAll('.carousel-track > img');
-        var prevBtn = carousel.querySelector('.prev');
-        var nextBtn = carousel.querySelector('.next');
-        var thumbs = document.querySelectorAll('#designThumbs img');
-        if (!track || slides.length === 0) return;
-
-        var index = 0;
-        function update() {
-            var width = carousel.clientWidth;
-            track.style.transform = 'translateX(' + (-index * width) + 'px)';
-            thumbs.forEach(function (t, i) {
-                if (i === index) t.classList.add('active');
-                else t.classList.remove('active');
-            });
+        var prevBtn = document.getElementById('heroPrevBtn');
+        var nextBtn = document.getElementById('heroNextBtn');
+        if (prevBtn) {
+            prevBtn.addEventListener('click', function () { moveHero(-1); });
         }
-        function go(delta) {
-            index = (index + delta + slides.length) % slides.length;
-            update();
+        if (nextBtn) {
+            nextBtn.addEventListener('click', function () { moveHero(1); });
         }
-        window.addEventListener('resize', update);
-        prevBtn.addEventListener('click', function () { go(-1); });
-        nextBtn.addEventListener('click', function () { go(1); });
-        thumbs.forEach(function (t, i) {
+        Array.from(document.querySelectorAll('#designThumbs [data-idx]')).forEach(function (t) {
             t.addEventListener('click', function () {
-                index = i;
-                update();
+                GALLERY_STATE.index = Number(this.getAttribute('data-idx') || 0);
+                updateHeroSelection();
             });
         });
-        update();
     }
 
     // ============ 灯箱 ============
@@ -2010,12 +2158,12 @@
             renderAuthor(meta);
             renderSource(meta);
             renderHero(meta, images);
-        renderCollectDate(meta);
+            renderCollectDate(meta);
             renderMetaExtras(meta);
             renderStats(meta);
             renderTags(meta);
             renderInstances(meta);
-            renderCarousel(images);
+            renderCarousel();
             renderSummary(meta);
             renderComments(meta);
 
