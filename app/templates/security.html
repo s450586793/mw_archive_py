@@ -57,6 +57,42 @@
       gap: 10px;
       flex-wrap: wrap;
     }
+    .tabs-wrap {
+      background: var(--panel);
+      border: 1px solid rgba(219, 228, 238, 0.9);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.06);
+      backdrop-filter: blur(10px);
+      margin-bottom: 18px;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      overflow-x: auto;
+      background: rgba(15, 23, 42, 0.03);
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      color: var(--muted);
+      text-decoration: none;
+      border-bottom: 3px solid transparent;
+      white-space: nowrap;
+      transition: all .18s ease;
+    }
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.7);
+    }
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      background: rgba(255, 255, 255, 0.96);
+    }
     .btn {
       display: inline-flex;
       align-items: center;
@@ -227,8 +263,18 @@
       </div>
       <div class="actions">
         <a class="btn" href="/"><i class="fas fa-house"></i> 模型库</a>
-        <a class="btn" href="/config"><i class="fas fa-cog"></i> 控制台</a>
         <a class="btn danger" href="/logout"><i class="fas fa-right-from-bracket"></i> 退出登录</a>
+      </div>
+    </div>
+
+    <div class="tabs-wrap">
+      <div class="tabs">
+        <a class="tab" href="/config?tab=config"><i class="fas fa-cog"></i> 配置信息</a>
+        <a class="tab" href="/config?tab=archive"><i class="fas fa-download"></i> 模型归档</a>
+        <a class="tab active" href="/security"><i class="fas fa-shield-halved"></i> 安全</a>
+        <a class="tab" href="/config?tab=missing"><i class="fas fa-exclamation-triangle"></i> 缺失记录</a>
+        <a class="tab" href="/config?tab=notify"><i class="fas fa-bell"></i> 通知</a>
+        <a class="tab" href="/config?tab=maintenance"><i class="fas fa-screwdriver-wrench"></i> 其他功能</a>
       </div>
     </div>
 

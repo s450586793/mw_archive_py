@@ -75,6 +75,10 @@
     transition: all var(--transition-fast);
 }
 
+.tab-link {
+    text-decoration: none;
+}
+
 .tab:hover {
     color: var(--text-primary);
     background: var(--bg-card);

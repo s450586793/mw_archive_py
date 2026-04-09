@@ -44,9 +44,6 @@
         <button class="btn btn-secondary" type="button" data-manual-import-open>
           <i class="fas fa-upload"></i> 手动导入
         </button>
-        <a class="btn btn-outline" href="/security">
-          <i class="fas fa-shield-halved"></i> 安全
-        </a>
         <a class="btn btn-outline" href="/logout">
           <i class="fas fa-right-from-bracket"></i> 退出登录
         </a>
@@ -66,6 +63,9 @@
         <button class="tab" data-tab="archive">
           <i class="fas fa-download"></i> 模型归档
         </button>
+        <a class="tab tab-link" href="/security">
+          <i class="fas fa-shield-halved"></i> 安全
+        </a>
         <button class="tab" data-tab="missing">
           <i class="fas fa-exclamation-triangle"></i> 缺失记录
         </button>
@@ -516,22 +516,35 @@
 
   <script src="/static/js/theme.js?v={{ project_version_short }}" defer></script>
   <script>
+    function activateTab(targetTab) {
+      if (!targetTab) return;
+      const nextContent = document.getElementById(`tab-${targetTab}`);
+      const nextTab = document.querySelector(`.tab[data-tab="${targetTab}"]`);
+      if (!nextContent || !nextTab) return;
+
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      nextTab.classList.add('active');
+
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      nextContent.classList.add('active');
+    }
+
     // Tab Switching
-    document.querySelectorAll('.tab').forEach(tab => {
+    document.querySelectorAll('.tab[data-tab]').forEach(tab => {
       tab.addEventListener('click', () => {
-        const targetTab = tab.dataset.tab;
-
-        // Update tab buttons
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-
-        // Update tab content
-        document.querySelectorAll('.tab-content').forEach(content => {
-          content.classList.remove('active');
-        });
-        document.getElementById(`tab-${targetTab}`).classList.add('active');
+        activateTab(tab.dataset.tab);
       });
     });
+
+    try {
+      const search = new URLSearchParams(window.location.search);
+      const initialTab = (search.get('tab') || '').trim();
+      if (initialTab) {
+        activateTab(initialTab);
+      }
+    } catch (_) { }
 
     // Log Terminal Toggle
     function toggleLogTerminal() {
