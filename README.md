@@ -4,6 +4,8 @@
 
 一个面向本地模型管理的工具，支持模型归档、本地 3MF 解析导入、模型库浏览与维护。
 
+> 说明：`s450586793/mw_archive_py` 这个 fork 分支到 `2026-04-10` 为止停止继续追加新功能，后续开发将迁移到全新的项目 [makerhub](https://github.com/s450586793/makerhub)。本仓库保留为旧分支定制版与历史参考。
+
 ## 当前版本
 - `v5.7.3`
 - 更新说明见 [doc/logs/v5.7.3_update_log.md](doc/logs/v5.7.3_update_log.md)
@@ -20,6 +22,11 @@
 - 本节仅记录 `s450586793/mw_archive_py` 分支上的自定义改动
 - 后续更新请直接在本节顶部追加新记录，不要覆盖旧记录
 - 记录顺序固定为“最新在最上”
+
+### 2026-04-10（更新 9）
+- 正式停止在当前 fork 分支上继续叠加新功能，后续开发迁移到全新项目 [makerhub](https://github.com/s450586793/makerhub)
+- README 中 Docker 镜像拉取地址、Compose 示例与油猴直装链接改为当前仓库所有者 `s450586793` 的源，避免继续指向原作者仓库
+- 当前仓库保留为历史定制版与兼容参考，后续如无特殊需要不再继续扩展业务功能
 
 ### 2026-04-09（更新 8）
 - 模型详情页继续按目标 MakerWorld 页面 `HAR` 做高保真重排：首屏改为“标题头 + 左侧主图图集 + 右侧打印配置卡 + 底部互动栏”的一体化结构
@@ -159,10 +166,10 @@ python server.py
   -v $PWD/app/config:/app/config \
   -v $PWD/app/watch:/app/watch \
   -v $PWD/app/organize:/app/organize \
-  sonicming/mw-archiver:latest
+  ghcr.io/s450586793/mw-archiver:latest
 ```
 
-如果网络问题可以更换镜像源 `docker.1ms.run/sonicming/mw-archiver:latest`
+如果网络问题可以更换镜像源 `docker.1ms.run/ghcr.io/s450586793/mw-archiver:latest`
 
 ### 本地构建
 ```bash
@@ -188,7 +195,7 @@ docker run -d \
 - `-v $PWD/app/config:/app/config`：持久化配置目录，保存通知配置、Cookie 配置、模型库状态配置。空目录也可自动初始化。
 - `-v $PWD/app/watch:/app/watch`：持久化本地批量导入监控目录，适合宿主机直接投放 `3MF` 文件。
 - `-v $PWD/app/organize:/app/organize`：持久化本地 3MF 整理目录，适合配置页点击“开始整理”后统一处理。
-- `sonicming/mw-archiver:latest`：使用的镜像及版本标签。
+- `ghcr.io/s450586793/mw-archiver:latest`：使用的镜像及版本标签。
 
 ## Docker Compose 启动
 创建 `docker-compose.yml` 文件：
@@ -198,7 +205,7 @@ version: '3.8'
 
 services:
   mw-archiver:
-    image: sonicming/mw-archiver:latest
+    image: ghcr.io/s450586793/mw-archiver:latest
     container_name: mw-archiver
     ports:
       - "8000:8000"
@@ -377,7 +384,7 @@ Chrome 插件：
 - 一键归档
 - 文件：`plugin/tampermonkey/mw_quick_archive.user.js`
 - 说明：[plugin/tampermonkey/使用说明.md](plugin/tampermonkey/使用说明.md)
-- 直接安装插件地址 [地址](https://github.com/sonicmingit/mw_archive_py/raw/refs/heads/main/plugin/tampermonkey/mw_quick_archive.user.js)
+- 直接安装插件地址 [地址](https://github.com/s450586793/mw_archive_py/raw/refs/heads/main/plugin/tampermonkey/mw_quick_archive.user.js)
 
 ## 文档目录
 - [api.md (API 接口文档)](doc/readme/api.md)

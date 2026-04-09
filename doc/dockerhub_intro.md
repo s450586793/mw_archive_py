@@ -13,5 +13,5 @@
 
 ## GitHub
 
-- 项目地址: [https://github.com/sonicmingit/mw_archive_py](https://github.com/sonicmingit/mw_archive_py)
-
+- 当前 fork 地址: [https://github.com/s450586793/mw_archive_py](https://github.com/s450586793/mw_archive_py)
+- 新项目地址: [https://github.com/s450586793/makerhub](https://github.com/s450586793/makerhub)

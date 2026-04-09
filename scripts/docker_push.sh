@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 脚本说明：
-# - 将本地镜像打标签并推送到 Docker Hub。
+# - 将本地镜像打标签并推送到 GitHub Container Registry。
 # - 同时推送两个标签：
 #   1) latest
 #   2) app/version.yml 中 project_version 对应的版本标签（如 5.2.0）
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SOURCE_IMAGE="${1:-mw-archiver:latest}"
-TARGET_REPO="sonicming/mw-archiver"
+TARGET_REPO="ghcr.io/s450586793/mw-archiver"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VERSION_FILE="$REPO_ROOT/app/version.yml"
@@ -77,7 +77,7 @@ if ! docker image inspect "$TARGET_IMAGE_VERSION" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "打标签成功。开始推送到 Docker Hub..."
+echo "打标签成功。开始推送到 GHCR..."
 
 # 推送 latest
 echo "推送：$TARGET_IMAGE_LATEST"
@@ -92,5 +92,5 @@ echo "推送完成："
 echo "- $TARGET_IMAGE_LATEST"
 echo "- $TARGET_IMAGE_VERSION"
 echo "如果推送失败，请检查："
-echo "1) 是否已 docker login"
-echo "2) 是否有 sonicming 仓库推送权限"
+echo "1) 是否已 docker login ghcr.io"
+echo "2) 是否有 ghcr.io/s450586793/mw-archiver 推送权限"
