@@ -755,6 +755,12 @@ function getModelDetailUrl(m) {
   return getEffectiveUseV2() ? `/v2/files/${safeDir}` : `/files/${safeDir}/index.html`;
 }
 
+function openModelDetail(m) {
+  const url = getModelDetailUrl(m);
+  if (!url) return;
+  window.location.assign(url);
+}
+
 function updateVersionToggle() {
   if (!v2ToggleBtn) return;
   const label = v2ToggleBtn.querySelector(".toggle-label");
@@ -852,7 +858,7 @@ function renderGrid(append = false) {
         toggleSelectionForModel(modelKey);
         return;
       }
-      window.open(getModelDetailUrl(m), "_blank");
+      openModelDetail(m);
     });
 
     const cover = document.createElement("img");
@@ -888,7 +894,7 @@ function renderGrid(append = false) {
         toggleSelectionForModel(modelKey);
         return;
       }
-      window.open(getModelDetailUrl(m), "_blank");
+      openModelDetail(m);
     });
     body.appendChild(title);
 
@@ -946,10 +952,10 @@ function renderGrid(append = false) {
     const openBtn = document.createElement("button");
     openBtn.className = "action-btn";
     openBtn.title = "查看详情";
-    openBtn.innerHTML = '<i class="fas fa-arrow-up-right-from-square"></i>';
+    openBtn.innerHTML = '<i class="fas fa-arrow-right"></i>';
     openBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      window.open(getModelDetailUrl(m), "_blank");
+      openModelDetail(m);
     });
     actions.appendChild(openBtn);
 

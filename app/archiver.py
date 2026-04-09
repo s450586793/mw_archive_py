@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import shutil
@@ -503,6 +504,271 @@ def fetch_design_from_api(
         if design:
             return design
     return None
+
+
+def _comment_text_value(value) -> str:
+    if isinstance(value, str):
+        return " ".join(value.split())
+    if isinstance(value, dict):
+        for key in ("text", "content", "value", "raw", "html", "message"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return " ".join(nested.split())
+    return ""
+
+
+def _comment_numeric(value) -> int:
+    try:
+        if value in (None, ""):
+            return 0
+        return int(float(value))
+    except Exception:
+        return 0
+
+
+def _extract_comment_image_candidates(node: dict) -> List[dict]:
+    found: List[dict] = []
+    if not isinstance(node, dict):
+        return found
+    keys = (
+        "pictures",
+        "images",
+        "imageList",
+        "imageUrls",
+        "commentPictures",
+        "commentImages",
+        "medias",
+        "mediaList",
+        "photos",
+    )
+    for key in keys:
+        items = node.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            url = ""
+            if isinstance(item, str):
+                url = item.strip()
+            elif isinstance(item, dict):
+                url = str(
+                    item.get("url")
+                    or item.get("imageUrl")
+                    or item.get("src")
+                    or item.get("originalUrl")
+                    or item.get("downloadUrl")
+                    or ""
+                ).strip()
+            if not url:
+                continue
+            found.append({"url": url})
+    return found
+
+
+def _normalize_comment_candidate(node: dict) -> Optional[dict]:
+    if not isinstance(node, dict):
+        return None
+
+    comment_markers = (
+        "commentId",
+        "rootCommentId",
+        "replyCount",
+        "subCommentCount",
+        "commentTime",
+        "commentType",
+        "isTop",
+        "isPinned",
+        "praiseCount",
+        "likeCount",
+        "rating",
+        "score",
+        "star",
+        "starLevel",
+    )
+    if not any(key in node for key in comment_markers):
+        return None
+    if any(key in node for key in ("designExtension", "coverUrl", "downloadCount", "printCount", "instances")):
+        return None
+
+    content = ""
+    for key in ("commentContent", "content", "comment", "message", "text", "body", "description"):
+        content = _comment_text_value(node.get(key))
+        if content:
+            break
+    if not content:
+        return None
+
+    user = node.get("user") or node.get("author") or node.get("creator") or node.get("commentUser") or {}
+    if not isinstance(user, dict):
+        user = {}
+    author_name = (
+        str(
+            user.get("nickname")
+            or user.get("nickName")
+            or user.get("name")
+            or user.get("username")
+            or user.get("userName")
+            or node.get("nickname")
+            or node.get("nickName")
+            or node.get("userName")
+            or node.get("username")
+            or node.get("authorName")
+            or node.get("creatorName")
+            or ""
+        ).strip()
+    )
+    author_avatar = str(
+        user.get("avatarUrl")
+        or user.get("avatar")
+        or user.get("headImg")
+        or node.get("avatarUrl")
+        or node.get("avatar")
+        or ""
+    ).strip()
+    author_url = str(user.get("homepage") or user.get("url") or node.get("authorUrl") or "").strip()
+
+    comment_id = str(node.get("commentId") or node.get("id") or node.get("rootCommentId") or "").strip()
+    created_at = str(
+        node.get("commentTime")
+        or node.get("createTime")
+        or node.get("createdAt")
+        or node.get("publishTime")
+        or node.get("time")
+        or ""
+    ).strip()
+    like_count = _comment_numeric(node.get("likeCount") or node.get("praiseCount"))
+    reply_count = _comment_numeric(node.get("replyCount") or node.get("subCommentCount") or node.get("childrenCount"))
+    rating = _comment_numeric(node.get("rating") or node.get("score") or node.get("star") or node.get("starLevel"))
+    if rating < 0:
+        rating = 0
+    if rating > 5:
+        rating = 5
+
+    badges: List[str] = []
+    if node.get("isTop") or node.get("isPinned"):
+        badges.append("置顶")
+    if node.get("isBoost") or node.get("isBoosted"):
+        badges.append("已助力")
+    if node.get("designerReplied") or node.get("hasDesignerReply") or node.get("isOfficialReply"):
+        badges.append("设计师已回复")
+    profile_name = str(node.get("profileName") or node.get("profileTitle") or "").strip()
+    if profile_name:
+        badges.append(profile_name)
+
+    images = _extract_comment_image_candidates(node)
+    stable_id = comment_id or hashlib.sha1(
+        f"{author_name}|{created_at}|{content}".encode("utf-8", errors="ignore")
+    ).hexdigest()[:16]
+
+    return {
+        "id": stable_id,
+        "author": {
+            "name": author_name,
+            "avatarUrl": author_avatar,
+            "avatarLocal": "",
+            "avatarRelPath": "",
+            "url": author_url,
+        },
+        "content": content,
+        "createdAt": created_at,
+        "likeCount": like_count,
+        "replyCount": reply_count,
+        "rating": rating,
+        "badges": badges,
+        "images": images,
+    }
+
+
+def _collect_comments_from_payload(node: object, out: List[dict], seen: set[str], depth: int = 0):
+    if depth > 12 or node is None:
+        return
+    if isinstance(node, list):
+        for item in node:
+            _collect_comments_from_payload(item, out, seen, depth + 1)
+        return
+    if not isinstance(node, dict):
+        return
+
+    comment = _normalize_comment_candidate(node)
+    if comment:
+        comment_id = str(comment.get("id") or "").strip()
+        if comment_id and comment_id not in seen:
+            seen.add(comment_id)
+            out.append(comment)
+
+    for value in node.values():
+        _collect_comments_from_payload(value, out, seen, depth + 1)
+
+
+def _extract_comment_count_from_payload(node: object, depth: int = 0, found: Optional[List[int]] = None) -> List[int]:
+    if found is None:
+        found = []
+    if depth > 10 or node is None:
+        return found
+    if isinstance(node, list):
+        for item in node:
+            _extract_comment_count_from_payload(item, depth + 1, found)
+        return found
+    if not isinstance(node, dict):
+        return found
+    for key, value in node.items():
+        lowered = str(key or "").strip().lower()
+        if lowered in {"commentcount", "commentscount", "reviewcount", "commenttotal", "totalcomments"}:
+            numeric = _comment_numeric(value)
+            if 0 <= numeric <= 50000:
+                found.append(numeric)
+        _extract_comment_count_from_payload(value, depth + 1, found)
+    return found
+
+
+def collect_comments(next_data: dict, design: dict, session: requests.Session, out_dir: Path) -> dict:
+    comments: List[dict] = []
+    seen: set[str] = set()
+    _collect_comments_from_payload(next_data, comments, seen)
+    _collect_comments_from_payload(design, comments, seen)
+
+    comment_count = 0
+    hints = _extract_comment_count_from_payload(next_data)
+    if hints:
+        comment_count = max(hints)
+    if comment_count <= 0:
+        counts = design.get("counts") or {}
+        comment_count = (
+            _comment_numeric(design.get("commentCount"))
+            or _comment_numeric(design.get("commentsCount"))
+            or _comment_numeric(design.get("reviewCount"))
+            or _comment_numeric(counts.get("comments"))
+        )
+
+    for idx, item in enumerate(comments, start=1):
+        author = item.get("author") if isinstance(item.get("author"), dict) else {}
+        avatar_url = str(author.get("avatarUrl") or "").strip()
+        if avatar_url:
+            avatar_name = f"comment_{idx:02d}_avatar.{pick_ext_from_url(avatar_url)}"
+            try:
+                download_file(session, avatar_url, out_dir / avatar_name)
+                author["avatarLocal"] = avatar_name
+                author["avatarRelPath"] = f"images/{avatar_name}"
+            except Exception as exc:
+                log("评论头像下载失败，保留原始链接：", avatar_url, exc)
+        images = item.get("images") if isinstance(item.get("images"), list) else []
+        for img_idx, image in enumerate(images, start=1):
+            if not isinstance(image, dict):
+                continue
+            url = str(image.get("url") or "").strip()
+            if not url:
+                continue
+            image_name = f"comment_{idx:02d}_img_{img_idx:02d}.{pick_ext_from_url(url)}"
+            try:
+                download_file(session, url, out_dir / image_name)
+                image["localName"] = image_name
+                image["relPath"] = f"images/{image_name}"
+            except Exception as exc:
+                log("评论图片下载失败，保留原始链接：", url, exc)
+
+    return {
+        "count": max(comment_count, len(comments)),
+        "items": comments,
+    }
 
 
 def parse_summary(design: dict, base_name: str, session: requests.Session, out_dir: Path):
@@ -1017,16 +1283,30 @@ def extract_instances(design: dict) -> List[dict]:
     return []
 
 
-def build_meta(design: dict, summary: dict, design_images: List[dict], cover_meta: Optional[dict], instances: List[dict], author: dict, base_name: str, attachments: Optional[List[dict]] = None):
+def build_meta(
+    design: dict,
+    summary: dict,
+    design_images: List[dict],
+    cover_meta: Optional[dict],
+    instances: List[dict],
+    author: dict,
+    base_name: str,
+    attachments: Optional[List[dict]] = None,
+    comments_bundle: Optional[dict] = None,
+):
     collect_ts = int(datetime.now().timestamp())
     update_time = datetime.now().isoformat()
     counts = design.get("counts") or {}
+    comments_bundle = comments_bundle if isinstance(comments_bundle, dict) else {}
+    comment_items = comments_bundle.get("items") if isinstance(comments_bundle.get("items"), list) else []
+    comment_count = _comment_numeric(comments_bundle.get("count"))
     stats = {
         "likes": design.get("likeCount") or counts.get("likes") or 0,
         "favorites": design.get("collectionCount") or design.get("favoriteCount") or design.get("favCount") or counts.get("favorites") or 0,
         "downloads": design.get("downloadCount") or counts.get("downloads") or 0,
         "prints": design.get("printCount") or counts.get("prints") or 0,
         "views": design.get("readCount") or counts.get("views") or 0,
+        "comments": comment_count or len(comment_items),
     }
     images_design_list = [d["fileName"] for d in design_images]
     summary_image_list = [i["fileName"] for i in summary.get("summaryImages", [])]
@@ -1082,6 +1362,8 @@ def build_meta(design: dict, summary: dict, design_images: List[dict], cover_met
             "html": summary.get("html", ""),
             "text": summary.get("text", ""),
         },
+        "commentCount": comment_count or len(comment_items),
+        "comments": comment_items,
         "instances": instances,
         "attachments": attachments or [],
         "collectDate": collect_ts,
@@ -1899,6 +2181,13 @@ def rebuild_once(meta_path: Path, progress_callback=None):
             log("移动 summary 图片:", p, "->", dst)
             shutil.move(str(p), str(dst))
 
+    for p in glob_with_prefix_or_plain(meta_path.parent, base_name, ["_comment_*", "comment_*"]):
+        new_name = strip_prefix(p.name, base_name)
+        dst = images_dir / new_name
+        if not dst.exists():
+            log("移动 comment 资源:", p, "->", dst)
+            shutil.move(str(p), str(dst))
+
     # 5. 实例配图/plate 缩略图
     for p in glob_with_prefix_or_plain(meta_path.parent, base_name, ["_inst*_*"]):
         new_name = strip_prefix(p.name, base_name)
@@ -2059,9 +2348,10 @@ def archive_model(
         log(logger, "检测到 Cloudflare 验证页面，可能需要更新 cookie 中的 cf_clearance")
 
     design = None
+    next_data = {}
     try:
-        data = extract_next_data(html_text)
-        design = extract_design_from_next_data(data)
+        next_data = extract_next_data(html_text)
+        design = extract_design_from_next_data(next_data)
         if design is None:
             log(logger, "未能从 __NEXT_DATA__ 定位 design，尝试 API 获取")
     except Exception as e:
@@ -2099,6 +2389,7 @@ def archive_model(
     summary = parse_summary(design, base_name, sess, images_dir)
     design_images, cover_meta = collect_design_images(design, sess, images_dir, base_name)
     attachments = extract_design_attachments(design)
+    comments_bundle = collect_comments(next_data, design, sess, images_dir)
 
     parsed_origin = urlparse(fetch_url)
     origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}" if parsed_origin.scheme and parsed_origin.netloc else "https://makerworld.com.cn"
@@ -2159,7 +2450,17 @@ def archive_model(
             inst_record.get("name") or "",
         )
 
-    meta = build_meta(design, summary, design_images, cover_meta, inst_list, author, base_name, attachments=attachments)
+    meta = build_meta(
+        design,
+        summary,
+        design_images,
+        cover_meta,
+        inst_list,
+        author,
+        base_name,
+        attachments=attachments,
+        comments_bundle=comments_bundle,
+    )
     meta_path = out_root / f"{base_name}_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     emit_progress(progress_callback, 78, "元数据已生成，准备落盘")

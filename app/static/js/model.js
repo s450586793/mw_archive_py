@@ -242,6 +242,7 @@
         return {
             likes: stats.likes || stats.like || 0,
             favorites: stats.favorites || stats.favorite || 0,
+            comments: stats.comments || stats.comment || meta.commentCount || 0,
             downloads: stats.downloads || stats.download || 0,
             prints: stats.prints || stats.print || 0,
             views: stats.views || stats.read || stats.reads || 0,
@@ -451,6 +452,23 @@
         });
     }
 
+    function initBackButton() {
+        var btn = document.getElementById('detailBackBtn');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+            try {
+                if (document.referrer) {
+                    var ref = new URL(document.referrer, window.location.href);
+                    if (ref.origin === window.location.origin) {
+                        window.history.back();
+                        return;
+                    }
+                }
+            } catch (_) { }
+            window.location.assign('/');
+        });
+    }
+
     function getOfflineFileList(kind) {
         try {
             var meta = window.__OFFLINE_META__ || {};
@@ -655,6 +673,7 @@
         var frags = [
             '<div class="stat-item"><div class="stat-val">' + stats.downloads + '</div><div class="stat-lbl">下载</div></div>',
             '<div class="stat-item"><div class="stat-val">' + stats.likes + '</div><div class="stat-lbl">点赞</div></div>',
+            '<div class="stat-item"><div class="stat-val">' + (stats.comments || 0) + '</div><div class="stat-lbl">评论</div></div>',
             '<div class="stat-item"><div class="stat-val">' + (stats.prints || '-') + '</div><div class="stat-lbl">打印</div></div>'
         ];
 
@@ -687,7 +706,79 @@
         html = transformSummaryHtml(html, function (fileName) {
             return fileUrl(MODEL_DIR, 'images/' + fileName);
         });
-        document.getElementById('summaryContent').innerHTML = html;
+        document.getElementById('summaryContent').innerHTML = html || '<div class="section-empty">暂无描述内容</div>';
+    }
+
+    function renderCommentStars(rating) {
+        var numeric = Number(rating || 0);
+        if (!Number.isFinite(numeric) || numeric <= 0) return '';
+        var stars = '';
+        for (var i = 0; i < 5; i += 1) {
+            stars += '<i class="fa' + (i < numeric ? 's' : 'r') + ' fa-star"></i>';
+        }
+        return '<div class="comment-card__stars" aria-label="评分 ' + numeric + ' / 5">' + stars + '</div>';
+    }
+
+    function renderComments(meta) {
+        var block = document.getElementById('commentsBlock');
+        var countEl = document.getElementById('commentsCount');
+        var listEl = document.getElementById('commentsList');
+        if (!block || !countEl || !listEl) return;
+
+        var comments = Array.isArray(meta.comments) ? meta.comments.slice() : [];
+        var totalCount = Number(meta.commentCount || (meta.stats && meta.stats.comments) || comments.length || 0);
+        countEl.textContent = totalCount > 0 ? '(' + totalCount + ')' : '';
+
+        if (!comments.length) {
+            block.classList.toggle('hidden', totalCount <= 0);
+            listEl.innerHTML = totalCount > 0
+                ? '<div class="section-empty">当前模型有评论计数，但归档时未抓到评论内容。</div>'
+                : '';
+            return;
+        }
+
+        comments.sort(function (a, b) {
+            return String(b && b.createdAt || '').localeCompare(String(a && a.createdAt || ''));
+        });
+
+        block.classList.remove('hidden');
+        listEl.innerHTML = comments.map(function (item) {
+            var author = item && item.author && typeof item.author === 'object' ? item.author : {};
+            var authorName = esc(author.name || '匿名用户');
+            var avatarUrl = author.avatarRelPath
+                ? fileUrl(MODEL_DIR, author.avatarRelPath)
+                : (author.avatarUrl || '');
+            var authorHtml = author.url
+                ? '<a class="comment-card__author-name" href="' + esc(author.url) + '" target="_blank" rel="noreferrer">' + authorName + '</a>'
+                : '<span class="comment-card__author-name">' + authorName + '</span>';
+            var badges = Array.isArray(item.badges) ? item.badges.filter(Boolean) : [];
+            var badgeHtml = badges.map(function (badge) {
+                return '<span class="comment-badge">' + esc(badge) + '</span>';
+            }).join('');
+            var images = Array.isArray(item.images) ? item.images : [];
+            var imagesHtml = images.map(function (image, index) {
+                var src = image && (image.relPath ? fileUrl(MODEL_DIR, image.relPath) : image.url);
+                if (!src) return '';
+                return '<img class="comment-image zoomable" src="' + esc(src) + '" alt="评论图片 ' + (index + 1) + '">';
+            }).join('');
+
+            return '<article class="comment-card">' +
+                '<div class="comment-card__header">' +
+                (avatarUrl ? '<img class="comment-card__avatar" src="' + esc(avatarUrl) + '" alt="' + authorName + '">' : '<div class="comment-card__avatar comment-card__avatar--placeholder"><i class="fas fa-user"></i></div>') +
+                '<div class="comment-card__meta">' +
+                '<div class="comment-card__author-row">' + authorHtml + badgeHtml + '</div>' +
+                '<div class="comment-card__info">' +
+                (item.createdAt ? '<span><i class="far fa-clock"></i> ' + esc(formatDateTime(item.createdAt)) + '</span>' : '') +
+                (item.likeCount ? '<span><i class="far fa-thumbs-up"></i> ' + esc(String(item.likeCount)) + '</span>' : '') +
+                (item.replyCount ? '<span><i class="far fa-message"></i> ' + esc(String(item.replyCount)) + '</span>' : '') +
+                '</div>' +
+                renderCommentStars(item.rating) +
+                '</div>' +
+                '</div>' +
+                '<div class="comment-card__body">' + esc(item.content || '') + '</div>' +
+                (imagesHtml ? '<div class="comment-card__images">' + imagesHtml + '</div>' : '') +
+                '</article>';
+        }).join('');
     }
 
     function summaryEditorValue(meta) {
@@ -1926,6 +2017,7 @@
             renderInstances(meta);
             renderCarousel(images);
             renderSummary(meta);
+            renderComments(meta);
 
             // 显示主内容，隐藏加载状态
             document.getElementById('loadingState').classList.add('hidden');
@@ -1939,6 +2031,7 @@
             initModelPathCopy(meta);
             initInstanceImport();
             initBambuOpenGuard();
+            initBackButton();
 
             // 仅在 file:// 直开且无法调用本地 API 时隐藏上传区块
             if (!canUseBackendApi()) {

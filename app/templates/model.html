@@ -38,6 +38,14 @@
         <!-- 主内容（初始隐藏） -->
         <div class="layout-wrapper hidden" id="mainContent">
 
+            <div class="detail-topbar">
+                <button class="detail-back-btn" type="button" id="detailBackBtn">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>返回模型库</span>
+                </button>
+                <div class="detail-topbar__hint">本地归档详情</div>
+            </div>
+
             <!-- 左栏: 图文展示区 -->
             <div class="layout-main">
                 <!-- 顶部图集 (轮播 / 英雄图) -->
@@ -46,15 +54,51 @@
                     <div id="carouselSection"></div>
                 </div>
 
+                <!-- 打印配置 / 实例 -->
+                <div class="instances-section card-block">
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-layer-group"></i>
+                            <span>打印配置</span>
+                        </div>
+                    </div>
+                    <div class="instance-admin hidden" id="instanceAdminBar">
+                        <button class="inst-admin-btn primary" type="button" id="instanceImportOpenBtn"><i class="fas fa-plus"></i> 添加打印配置</button>
+                    </div>
+                    <div class="instances" id="instanceList"></div>
+                </div>
+
                 <!-- 简介区 -->
                 <div class="summary-section card-block">
-                    <div class="section-title"><i class="fas fa-file-alt"></i> 模型简介</div>
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-file-alt"></i>
+                            <span>描述</span>
+                        </div>
+                    </div>
                     <div class="summary" id="summaryContent"></div>
+                </div>
+
+                <!-- 评论 -->
+                <div class="comments-section card-block hidden" id="commentsBlock">
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-comments"></i>
+                            <span>评论 & 评分</span>
+                        </div>
+                        <span class="section-count" id="commentsCount"></span>
+                    </div>
+                    <div class="comments-list" id="commentsList"></div>
                 </div>
 
                 <!-- 打印成品墙 -->
                 <div class="printed-section card-block">
-                    <div class="section-title"><i class="fas fa-camera"></i> 打印成品</div>
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-camera"></i>
+                            <span>打印成品</span>
+                        </div>
+                    </div>
                     <div class="printed">
                         <div class="attach-upload">
                             <input type="file" id="printedInput" multiple accept="image/*">
@@ -69,7 +113,12 @@
 
                 <!-- 附件文件 (移动至左侧下方) -->
                 <div class="attachments-section card-block">
-                    <div class="section-title"><i class="fas fa-paperclip"></i> 附件文件</div>
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-paperclip"></i>
+                            <span>附件文件</span>
+                        </div>
+                    </div>
                     <div class="attachments">
                         <div class="attach-upload">
                             <input type="file" id="attachInput" multiple>
@@ -107,17 +156,13 @@
 
                 <!-- 标签 (移动端 order 2) -->
                 <div class="tags-section card-block hidden" id="tagsBlock">
-                    <div class="section-title"><i class="fas fa-tags"></i> 标签</div>
-                    <div class="tag-list" id="tagList"></div>
-                </div>
-
-                <!-- 打印配置 / 实例 (移动端 order 4) -->
-                <div class="instances-section card-block">
-                    <div class="section-title"><i class="fas fa-layer-group"></i> 打印配置</div>
-                    <div class="instance-admin hidden" id="instanceAdminBar">
-                        <button class="inst-admin-btn primary" type="button" id="instanceImportOpenBtn"><i class="fas fa-plus"></i> 添加打印配置</button>
+                    <div class="section-title">
+                        <div class="section-title__main">
+                            <i class="fas fa-tags"></i>
+                            <span>标签</span>
+                        </div>
                     </div>
-                    <div class="instances" id="instanceList"></div>
+                    <div class="tag-list" id="tagList"></div>
                 </div>
             </div>
 
