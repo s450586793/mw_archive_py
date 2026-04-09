@@ -309,6 +309,35 @@
     </div>
 
     <section class="card" style="margin-bottom:18px;">
+      <h2>修改登录账号</h2>
+      <div class="stack">
+        <div class="field">
+          <label for="authUsernameInput">新用户名</label>
+          <input id="authUsernameInput" type="text" placeholder="请输入新的登录用户名" />
+        </div>
+        <div class="field">
+          <label for="authCurrentPasswordInput">当前密码</label>
+          <input id="authCurrentPasswordInput" type="password" placeholder="请输入当前密码" />
+        </div>
+        <div class="field">
+          <label for="authPasswordInput">新密码</label>
+          <input id="authPasswordInput" type="password" placeholder="请输入新的登录密码" />
+        </div>
+        <div class="field">
+          <label for="authPasswordConfirmInput">确认新密码</label>
+          <input id="authPasswordConfirmInput" type="password" placeholder="请再次输入新的登录密码" />
+        </div>
+        <div class="actions">
+          <button class="btn primary" type="button" id="saveAuthBtn">
+            <i class="fas fa-user-pen"></i> 保存登录信息
+          </button>
+        </div>
+        <div class="helper">默认账号密码为 `admin / admin`。修改后会立即写入配置文件，并保持当前登录会话。</div>
+        <div id="authNotice" class="notice info"></div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom:18px;">
       <h2>生成新 Token</h2>
       <div class="stack">
         <div class="field">
@@ -362,6 +391,12 @@
       box.className = 'notice show ' + (type || 'info');
     }
 
+    function showAuthNotice(message, type) {
+      const box = document.getElementById('authNotice');
+      box.textContent = message || '';
+      box.className = 'notice show ' + (type || 'info');
+    }
+
     async function apiFetch(url, options) {
       const res = await fetch(url, Object.assign({ credentials: 'same-origin' }, options || {}));
       if (res.status === 401) {
@@ -381,9 +416,38 @@
       document.getElementById('tokenFile').textContent = cfg.token_file || '-';
       document.getElementById('tokenCount').textContent = String(cfg.token_count || 0);
       document.getElementById('authUsername').textContent = auth.username || cfg.auth_username || '-';
+      document.getElementById('authUsernameInput').value = auth.username || cfg.auth_username || '';
       document.getElementById('authStatus').innerHTML = auth.logged_in
         ? '<span class="status ok">已登录</span>'
         : '<span class="status off">未登录</span>';
+    }
+
+    async function saveAuthCredentials() {
+      const username = (document.getElementById('authUsernameInput').value || '').trim();
+      const currentPassword = document.getElementById('authCurrentPasswordInput').value || '';
+      const password = document.getElementById('authPasswordInput').value || '';
+      const confirmPassword = document.getElementById('authPasswordConfirmInput').value || '';
+      const res = await apiFetch('/api/auth/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          current_password: currentPassword,
+          password,
+          confirm_password: confirmPassword
+        })
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const data = await res.json();
+      document.getElementById('authCurrentPasswordInput').value = '';
+      document.getElementById('authPasswordInput').value = '';
+      document.getElementById('authPasswordConfirmInput').value = '';
+      document.getElementById('authUsername').textContent = data.username || username || '-';
+      document.getElementById('authUsernameInput').value = data.username || username || '';
+      showAuthNotice('登录账号信息已更新。', 'ok');
+      await loadOverview();
     }
 
     async function loadTokens() {
@@ -475,6 +539,14 @@
         await copyLatestToken();
       } catch (err) {
         showNotice('复制失败: ' + (err && err.message ? err.message : err), 'error');
+      }
+    });
+
+    document.getElementById('saveAuthBtn').addEventListener('click', async () => {
+      try {
+        await saveAuthCredentials();
+      } catch (err) {
+        showAuthNotice('保存登录信息失败: ' + (err && err.message ? err.message : err), 'error');
       }
     });
 

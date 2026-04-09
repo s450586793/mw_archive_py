@@ -102,7 +102,7 @@ DEFAULT_CONFIG = {
     "auth": {
         "enabled": True,
         "username": "admin",
-        "password": "change-me",
+        "password": "admin",
         "session_secret": "",
     },
     "local_batch_import": {
@@ -2462,6 +2462,12 @@ def load_raw_config() -> dict:
             changed = True
 
     cfg["auth"] = _normalize_auth_config(cfg.get("auth"))
+    if (
+        str(cfg["auth"].get("username") or "").strip() == "admin"
+        and str(cfg["auth"].get("password") or "") == "change-me"
+    ):
+        cfg["auth"]["password"] = "admin"
+        changed = True
     if not cfg["auth"].get("session_secret"):
         cfg["auth"]["session_secret"] = secrets.token_hex(32)
         changed = True
@@ -2730,6 +2736,34 @@ def validate_session_login(username: str, password: str) -> bool:
     )
 
 
+def update_auth_credentials(username: str, password: str):
+    global CFG
+    next_username = str(username or "").strip()
+    next_password = str(password or "")
+    if not next_username:
+        raise ValueError("用户名不能为空")
+    if len(next_username) > 64:
+        raise ValueError("用户名长度不能超过 64 个字符")
+    if not next_password:
+        raise ValueError("密码不能为空")
+    if len(next_password) < 4:
+        raise ValueError("密码至少需要 4 位")
+
+    raw_cfg = load_raw_config()
+    auth_cfg = raw_cfg.get("auth") if isinstance(raw_cfg.get("auth"), dict) else {}
+    auth_cfg["enabled"] = bool(auth_cfg.get("enabled", True))
+    auth_cfg["username"] = next_username
+    auth_cfg["password"] = next_password
+    auth_cfg["session_secret"] = str(auth_cfg.get("session_secret") or "").strip() or secrets.token_hex(32)
+    raw_cfg["auth"] = auth_cfg
+    save_raw_config(raw_cfg)
+    CFG.update(build_runtime_config(raw_cfg))
+    return {
+        "username": str(CFG.get("auth", {}).get("username") or "").strip(),
+        "auth_enabled": bool(CFG.get("auth", {}).get("enabled", True)),
+    }
+
+
 def build_login_page(error_message: str = "") -> str:
     error_html = ""
     if error_message:
@@ -2832,7 +2866,7 @@ def build_login_page(error_message: str = "") -> str:
             <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" />
             <button type="submit">登录</button>
             {error_html}
-            <div class="hint">用户名和密码来自服务端配置文件，Token 请在登录后到“安全设置”里生成。</div>
+            <div class="hint">默认账号密码为 admin / admin。用户名和密码来自服务端配置文件，Token 请在登录后到“安全设置”里生成。</div>
         </form>
     </body>
     </html>
@@ -4068,6 +4102,36 @@ async def api_auth_status(request: Request):
         "username": get_session_user(request) if logged_in else "",
         "api_authenticated": isinstance(auth_context, dict),
         "auth_type": str((auth_context or {}).get("type") or "").strip(),
+    }
+
+
+@app.post("/api/auth/credentials")
+async def api_update_auth_credentials(request: Request, body: dict):
+    current_user = require_session_user(request)
+    payload = body or {}
+    current_password = str(payload.get("current_password") or "")
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    confirm_password = str(payload.get("confirm_password") or "")
+
+    if not validate_session_login(current_user, current_password):
+        raise HTTPException(400, "当前密码不正确")
+    if not username:
+        raise HTTPException(400, "用户名不能为空")
+    if password != confirm_password:
+        raise HTTPException(400, "两次输入的新密码不一致")
+
+    try:
+        result = update_auth_credentials(username, password)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+
+    request.session["user"] = result.get("username") or username
+    return {
+        "status": "ok",
+        "username": result.get("username") or username,
+        "auth_enabled": bool(result.get("auth_enabled", True)),
+        "updated_at": now_iso(),
     }
 
 

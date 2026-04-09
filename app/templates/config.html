@@ -545,6 +545,18 @@
         content.classList.remove('active');
       });
       nextContent.classList.add('active');
+      try {
+        const url = new URL(window.location.href);
+        if (targetTab) {
+          url.searchParams.set('tab', targetTab);
+        } else {
+          url.searchParams.delete('tab');
+        }
+        window.history.replaceState({}, '', url.toString());
+      } catch (_) { }
+      if (targetTab === 'archive') {
+        restoreArchiveTaskState({ silent: true });
+      }
     }
 
     // Tab Switching
@@ -900,6 +912,40 @@
       }
     }
 
+    function getArchiveTaskStorageKey() {
+      return 'mw_archive_last_task_id';
+    }
+
+    function rememberArchiveTaskId(taskId) {
+      const value = String(taskId || '').trim();
+      if (!value) return;
+      try {
+        localStorage.setItem(getArchiveTaskStorageKey(), value);
+      } catch (_) { }
+    }
+
+    function readRememberedArchiveTaskId() {
+      try {
+        return String(localStorage.getItem(getArchiveTaskStorageKey()) || '').trim();
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function clearRememberedArchiveTaskId() {
+      try {
+        localStorage.removeItem(getArchiveTaskStorageKey());
+      } catch (_) { }
+    }
+
+    async function fetchArchiveQueue() {
+      const res = await fetch('/api/archive/queue');
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      return await res.json();
+    }
+
     function translateBatchSource(value) {
       const normalized = String(value || '').trim().toLowerCase();
       if (!normalized) return '';
@@ -1248,6 +1294,7 @@
       window.__archiveTrackedTaskId = taskId;
       window.__archiveLastProgressSignature = '';
       window.__archivePollAttempts = 0;
+      rememberArchiveTaskId(taskId);
 
       const tick = async () => {
         try {
@@ -1304,6 +1351,50 @@
       tick();
     }
 
+    async function restoreArchiveTaskState(options = {}) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const silent = !!opts.silent;
+      const rememberedTaskId = readRememberedArchiveTaskId();
+
+      if (rememberedTaskId) {
+        try {
+          const remembered = await fetchArchiveTask(rememberedTaskId);
+          const task = (remembered && remembered.task) || {};
+          if (task && task.task_id) {
+            renderArchiveTask(task);
+            if (task.status === 'queued' || task.status === 'running') {
+              if (!silent) appendLog('已恢复正在跟踪的归档任务: ' + task.task_id);
+              pollArchiveTask(task.task_id);
+            } else {
+              window.__archiveTrackedTaskId = task.task_id;
+            }
+            return;
+          }
+        } catch (_) {
+          clearRememberedArchiveTaskId();
+        }
+      }
+
+      try {
+        const queue = await fetchArchiveQueue();
+        const task = queue.running || (Array.isArray(queue.queued) && queue.queued.length ? queue.queued[0] : null) || (Array.isArray(queue.recent) && queue.recent.length ? queue.recent[0] : null);
+        if (task && task.task_id) {
+          renderArchiveTask(task);
+          rememberArchiveTaskId(task.task_id);
+          if (task.status === 'queued' || task.status === 'running') {
+            if (!silent) appendLog('已恢复当前队列任务: ' + task.task_id);
+            pollArchiveTask(task.task_id);
+          } else {
+            window.__archiveTrackedTaskId = task.task_id;
+          }
+        }
+      } catch (err) {
+        if (!silent) {
+          appendLog('恢复归档任务状态失败: ' + (err && err.message ? err.message : err));
+        }
+      }
+    }
+
     async function startArchive() {
       const url = document.getElementById('modelUrl').value.trim();
       if (!url) {
@@ -1335,6 +1426,7 @@
           const task = (data && data.task) || {};
           const queuePos = Number(task.queue_position || 0);
           renderArchiveTask(task);
+          if (task.task_id) rememberArchiveTaskId(task.task_id);
           appendLog((data && data.message) || '归档任务已提交');
           if (data && data.deduplicated) {
             appendLog('检测到同一任务重复提交，已复用任务: ' + (task.task_id || '-'));
@@ -1467,6 +1559,12 @@
     // Initialize
     loadConfig();
     loadMissing();
+    try {
+      const activeTab = document.querySelector('.tab.active[data-tab]');
+      if (activeTab && activeTab.dataset && activeTab.dataset.tab === 'archive') {
+        restoreArchiveTaskState({ silent: true });
+      }
+    } catch (_) { }
   </script>
   <script src="/static/js/manual_import.js?v={{ project_version_short }}" defer></script>
 </body>
