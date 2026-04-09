@@ -80,6 +80,18 @@
         }
     }
 
+    function formatUnixDate(ts) {
+        var num = Number(ts || 0);
+        if (!Number.isFinite(num) || num <= 0) return '';
+        try {
+            var d = new Date(num * 1000);
+            if (isNaN(d.getTime())) return '';
+            return d.toISOString().slice(0, 10);
+        } catch (_) {
+            return '';
+        }
+    }
+
     /** 提取文件名 */
     function toName(item) {
         if (!item) return null;
@@ -217,6 +229,9 @@
     function transformSummaryHtml(html, resolveImageSrc) {
         var raw = String(html || '');
         raw = raw.replace(/<div[^>]*class=["'][^"']*translated-text[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+        raw = raw.replace(/<boostme>\s*<boosttitle>([\s\S]*?)<\/boosttitle>\s*<boostcontent>([\s\S]*?)<\/boostcontent>\s*<\/boostme>/gi, function (_match, title, content) {
+            return '<div class="boostmeroot"><div class="boostme"><p class="boosttitle">' + title + '</p><p class="boostcontent">' + content + '</p></div></div>';
+        });
         raw = raw.replace(/<figure[^>]*class=["'][^"']*media[^"']*["'][^>]*>\s*<oembed[^>]*url=["']([^"']+)["'][^>]*><\/oembed>\s*<\/figure>/gi, function (_match, url) {
             return buildSummaryVideoHtml(url) || _match;
         });
@@ -496,8 +511,8 @@
         var el = document.getElementById('titleSection');
         var title = esc(meta.title || '');
         var url = meta.url || '';
-        el.innerHTML = title +
-            (url ? ' <a class="origin-link" href="' + esc(url) + '" target="_blank" rel="noreferrer">原文链接</a>' : '');
+        el.innerHTML = '<span class="title-text">' + title + '</span>' +
+            (url ? '<span class="title-links"><a class="origin-link" href="' + esc(url) + '" target="_blank" rel="noreferrer">原文链接</a></span>' : '');
         document.title = meta.title || '模型详情';
     }
 
@@ -667,7 +682,7 @@
             html += '<img class="avatar" src="' + fileUrl(MODEL_DIR, author.avatar) + '" alt="avatar">';
         }
         html += '<div class="author-meta">';
-        html += '<span class="author-label">作者</span>';
+        html += '<span class="author-label">设计师</span>';
         if (author.url) {
             html += '<a class="author-name" href="' + esc(author.url) + '" target="_blank" rel="noreferrer">' + esc(author.name) + '</a>';
         } else {
@@ -692,9 +707,8 @@
             el.textContent = '';
             return;
         }
-        var d = new Date(ts * 1000);
-        var dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-        el.innerHTML = '<i class="far fa-calendar-alt"></i> 采集于 ' + dateStr;
+        var dateStr = formatUnixDate(ts);
+        el.innerHTML = '<i class="far fa-calendar-alt"></i> 本地归档于 ' + dateStr;
     }
 
     function renderMetaExtras(meta) {
@@ -728,24 +742,41 @@
 
     function renderStats(meta) {
         var source = normalizeSource(meta);
-        var isOthers = source === 'others' || source === 'localmodel';
-        if (isOthers) return;
         var stats = normalizeStats(meta);
         var el = document.getElementById('statsSection');
+        if (!el) return;
 
-        var frags = [
-            '<div class="stat-item"><div class="stat-val">' + stats.downloads + '</div><div class="stat-lbl">下载</div></div>',
-            '<div class="stat-item"><div class="stat-val">' + stats.likes + '</div><div class="stat-lbl">点赞</div></div>',
-            '<div class="stat-item"><div class="stat-val">' + (stats.comments || 0) + '</div><div class="stat-lbl">评论</div></div>',
-            '<div class="stat-item"><div class="stat-val">' + (stats.prints || '-') + '</div><div class="stat-lbl">打印</div></div>'
+        var shareCount = Number(meta.shareCount || (meta.stats && meta.stats.shares) || 0) || 0;
+        var publishDate = '';
+        if (meta.publishTime || meta.publishedAt || meta.createTime || meta.createdAt) {
+            publishDate = formatDate(meta.publishTime || meta.publishedAt || meta.createTime || meta.createdAt);
+        }
+        if (!publishDate && Array.isArray(meta.instances)) {
+            var dated = meta.instances
+                .map(function (inst) { return formatDate(inst && inst.publishTime); })
+                .filter(Boolean);
+            if (dated.length) publishDate = dated.sort()[0];
+        }
+        if (!publishDate) publishDate = formatUnixDate(meta.collectDate);
+
+        var ctaLabel = source === 'localmodel' ? '手动导入' : '本地归档';
+        var actions = [
+            '<button class="engagement-pill engagement-pill--cta" type="button" disabled><i class="fas fa-box-archive"></i><span>' + ctaLabel + '</span></button>',
+            '<button class="engagement-pill" type="button" disabled><i class="far fa-thumbs-up"></i><span>' + stats.likes + '</span></button>',
+            '<button class="engagement-pill" type="button" disabled><i class="far fa-star"></i><span>' + stats.favorites + '</span></button>',
+            '<button class="engagement-pill" type="button" disabled><i class="far fa-comment"></i><span>' + (stats.comments || 0) + '</span></button>',
+            '<button class="engagement-pill" type="button" disabled><i class="fas fa-share-nodes"></i><span>' + shareCount + '</span></button>'
         ];
+        var metaRow = [
+            '<span><i class="fas fa-download"></i> ' + stats.downloads + '</span>',
+            '<span><i class="fas fa-print"></i> ' + (stats.prints || 0) + '</span>',
+            '<span><i class="fas fa-eye"></i> ' + (stats.views || 0) + '</span>',
+            publishDate ? '<span><i class="far fa-calendar"></i> 发布于 ' + publishDate + '</span>' : ''
+        ].filter(Boolean);
 
-        var iconsHtml = '<div class="stats-icons-row">' +
-            '<span class="stat-chip" title="收藏"><i class="fas fa-star"></i> ' + stats.favorites + '</span>' +
-            '<span class="stat-chip" title="浏览"><i class="fas fa-eye"></i> ' + stats.views + '</span>' +
-            '</div>';
-
-        el.innerHTML = '<div class="stats">' + frags.join('') + '</div>' + iconsHtml;
+        el.innerHTML =
+            '<div class="engagement-bar">' + actions.join('') + '</div>' +
+            '<div class="engagement-meta">' + metaRow.join('') + '</div>';
     }
 
     function renderTags(meta) {
@@ -769,7 +800,9 @@
         html = transformSummaryHtml(html, function (fileName) {
             return fileUrl(MODEL_DIR, 'images/' + fileName);
         });
-        document.getElementById('summaryContent').innerHTML = html || '<div class="section-empty">暂无描述内容</div>';
+        document.getElementById('summaryContent').innerHTML = html
+            ? '<div class="summary-rich">' + html + '</div>'
+            : '<div class="section-empty">暂无描述内容</div>';
     }
 
     function renderCommentStars(rating) {
@@ -1084,9 +1117,9 @@
         }
 
         if (stripEl) {
-            var chips = ['<button class="instance-filter-chip' + (INSTANCE_STATE.activeIndex === 0 ? ' is-active' : '') + '" type="button" data-instance-chip="0">全部</button>'];
+            var chips = [];
             instances.forEach(function (inst, idx) {
-                chips.push('<button class="instance-filter-chip' + (INSTANCE_STATE.activeIndex === idx && idx !== 0 ? ' is-active' : '') + '" type="button" data-instance-chip="' + idx + '">' + esc(shortenText(inst.title || inst.name || ('配置 ' + (idx + 1)), 14)) + '</button>');
+                chips.push('<button class="instance-filter-chip' + (INSTANCE_STATE.activeIndex === idx ? ' is-active' : '') + '" type="button" data-instance-chip="' + idx + '">' + esc(shortenText(inst.title || inst.name || ('配置 ' + (idx + 1)), 14)) + '</button>');
             });
             stripEl.innerHTML = chips.join('');
             Array.from(stripEl.querySelectorAll('[data-instance-chip]')).forEach(function (node) {
