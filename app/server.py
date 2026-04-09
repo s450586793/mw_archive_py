@@ -573,6 +573,38 @@ def _extract_model_urls_from_text(text: str, base_url: str) -> List[str]:
     return found
 
 
+def _normalize_model_candidate_from_node(node: Any, base_url: str) -> str:
+    if not isinstance(node, dict):
+        return ""
+    model_id = node.get("designId") or node.get("design_id") or node.get("modelId") or node.get("model_id") or node.get("id")
+    if model_id is not None:
+        text_id = str(model_id).strip()
+        looks_like_model = bool(re.fullmatch(r"\d{3,}", text_id)) and any(
+            key in node
+            for key in (
+                "designId",
+                "designTitle",
+                "modelTitle",
+                "coverUrl",
+                "coverImage",
+                "downloadCount",
+                "printCount",
+                "designCreator",
+                "summary",
+                "likeCount",
+                "title",
+            )
+        )
+        if looks_like_model:
+            return _normalize_model_page_url(f"{_makerworld_origin_for_url(base_url)}/zh/models/{text_id}", base_url)
+    url_fields = ("url", "href", "modelUrl", "designUrl", "jumpUrl", "link")
+    for field in url_fields:
+        normalized = _normalize_model_page_url(str(node.get(field) or "").strip(), base_url)
+        if normalized:
+            return normalized
+    return ""
+
+
 def _append_unique_urls(target: List[str], values: List[str], seen: set[str]):
     for item in values or []:
         normalized = str(item or "").strip()
@@ -595,34 +627,116 @@ def _collect_model_urls_from_payload(node: Any, base_url: str, out: List[str], s
     if not isinstance(node, dict):
         return
 
-    model_id = node.get("designId") or node.get("design_id") or node.get("modelId") or node.get("model_id") or node.get("id")
-    looks_like_model = False
-    if model_id is not None:
-        text_id = str(model_id).strip()
-        looks_like_model = bool(re.fullmatch(r"\d{3,}", text_id)) and any(
-            key in node
-            for key in (
-                "designId",
-                "designTitle",
-                "modelTitle",
-                "coverUrl",
-                "coverImage",
-                "downloadCount",
-                "printCount",
-                "designCreator",
-                "summary",
-                "likeCount",
-                "title",
-            )
-        )
-        if looks_like_model:
-            candidate = _normalize_model_page_url(f"{_makerworld_origin_for_url(base_url)}/zh/models/{text_id}", base_url)
-            if candidate and candidate not in seen:
-                seen.add(candidate)
-                out.append(candidate)
+    candidate = _normalize_model_candidate_from_node(node, base_url)
+    if candidate and candidate not in seen:
+        seen.add(candidate)
+        out.append(candidate)
 
     for value in node.values():
         _collect_model_urls_from_payload(value, base_url, out, seen, depth + 1)
+
+
+def _extract_model_urls_from_dom(html_text: str, page_url: str) -> List[str]:
+    raw = str(html_text or "")
+    if not raw:
+        return []
+    base_url = _makerworld_origin_for_url(page_url)
+    try:
+        soup = BeautifulSoup(raw, "html.parser")
+    except Exception:
+        return []
+
+    scored: List[tuple[int, str]] = []
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip()
+        normalized = _normalize_model_page_url(href, base_url)
+        if not normalized:
+            continue
+
+        score = 0
+        text = " ".join(anchor.get_text(" ", strip=True).split())
+        if text:
+            score += 2
+        if anchor.find("img") is not None:
+            score += 3
+
+        parent = anchor
+        context_tokens: List[str] = []
+        for _ in range(4):
+            parent = parent.parent
+            if not parent or not hasattr(parent, "get"):
+                break
+            class_attr = parent.get("class") or []
+            if isinstance(class_attr, str):
+                context_tokens.append(class_attr.lower())
+            else:
+                context_tokens.extend(str(item).lower() for item in class_attr if str(item).strip())
+            ident = str(parent.get("id") or "").strip().lower()
+            if ident:
+                context_tokens.append(ident)
+        context_text = " ".join(context_tokens)
+        if any(token in context_text for token in ("model", "design", "card", "item", "list", "grid", "feed")):
+            score += 3
+        if any(token in context_text for token in ("header", "footer", "nav", "menu", "breadcrumb", "history", "recommend", "related")):
+            score -= 4
+
+        scored.append((score, normalized))
+
+    if not scored:
+        return []
+
+    positive_scores = [score for score, _url in scored if score > 0]
+    threshold = max(min(max(positive_scores) - 2, 3), 1) if positive_scores else 0
+    found: List[str] = []
+    seen: set[str] = set()
+    for score, normalized in scored:
+        if score < threshold:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        found.append(normalized)
+    return found
+
+
+def _find_best_model_list_candidate(node: Any, base_url: str) -> Optional[dict]:
+    best: Optional[dict] = None
+
+    def visit(cur: Any, path: List[str], depth: int = 0):
+        nonlocal best
+        if depth > 12 or cur is None:
+            return
+        if isinstance(cur, list):
+            urls: List[str] = []
+            seen_urls: set[str] = set()
+            for item in cur:
+                normalized = _normalize_model_candidate_from_node(item, base_url)
+                if normalized and normalized not in seen_urls:
+                    seen_urls.add(normalized)
+                    urls.append(normalized)
+            if urls:
+                path_text = ".".join(path).lower()
+                score = len(urls) * 10
+                if any(token in path_text for token in ("upload", "publish", "published", "model", "design", "list", "items", "cards", "results")):
+                    score += 20
+                if any(token in path_text for token in ("recommend", "related", "history", "guess", "other", "rank")):
+                    score -= 25
+                candidate = {
+                    "urls": urls,
+                    "score": score,
+                    "path": path[:],
+                }
+                if best is None or int(candidate["score"]) > int(best["score"]):
+                    best = candidate
+            for idx, item in enumerate(cur[:80]):
+                visit(item, path + [str(idx)], depth + 1)
+            return
+        if isinstance(cur, dict):
+            for key, value in cur.items():
+                visit(value, path + [str(key)], depth + 1)
+
+    visit(node, [])
+    return best
 
 
 def _extract_page_count_hint_from_payload(node: Any, depth: int = 0, found: Optional[List[int]] = None) -> List[int]:
@@ -668,12 +782,20 @@ def _extract_page_count_hint(html_text: str) -> int:
 
 def _extract_model_urls_from_html(html_text: str, page_url: str) -> List[str]:
     base_url = _makerworld_origin_for_url(page_url)
-    found_from_payload: List[str] = []
-    seen_payload: set[str] = set()
+    found_from_dom = _extract_model_urls_from_dom(html_text, page_url)
     try:
         next_data = extract_next_data(html_text)
     except Exception:
         next_data = {}
+    best_list = _find_best_model_list_candidate(next_data, base_url)
+    found_from_payload: List[str] = []
+    seen_payload: set[str] = set()
+    if isinstance(best_list, dict):
+        _append_unique_urls(found_from_payload, best_list.get("urls") or [], seen_payload)
+    if found_from_dom and len(found_from_dom) >= len(found_from_payload):
+        return found_from_dom
+    if found_from_payload:
+        return found_from_payload
     _collect_model_urls_from_payload(next_data, base_url, found_from_payload, seen_payload)
     if found_from_payload:
         return found_from_payload
@@ -740,6 +862,14 @@ def _resolve_batch_model_urls_with_cookie(source_url: str, raw_cookie: str, prog
         before_count = len(all_urls)
         _append_unique_urls(all_urls, page_urls, seen)
         new_count = len(all_urls) - before_count
+        logger.info(
+            "批量列表解析 page=%s page_url=%s page_models=%s discovered_total=%s page_hint=%s",
+            page,
+            page_url,
+            len(page_urls),
+            len(all_urls),
+            page_count_hint,
+        )
 
         if page_count_hint and page >= page_count_hint:
             break
