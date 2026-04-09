@@ -16,7 +16,7 @@ from html import escape as escape_html
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 import uvicorn
@@ -34,6 +34,9 @@ from archiver import (
     archive_model,
     build_index_html,
     download_file,
+    extract_next_data,
+    fetch_html_with_curl,
+    fetch_html_with_requests,
     fetch_instance_3mf,
     parse_cookies,
     sanitize_filename,
@@ -178,12 +181,125 @@ MODEL_DOWNLOAD_ERROR_COOKIE_INVALID = "cookie_invalid"
 MODEL_DOWNLOAD_ERROR_COOKIE_CHALLENGE = "cookie_challenge"
 MODEL_DOWNLOAD_ERROR_RATE_LIMIT = "rate_limit"
 MODEL_DOWNLOAD_ERROR_UNKNOWN = "unknown"
+ARCHIVE_KIND_SINGLE = "single"
+ARCHIVE_KIND_BATCH = "batch"
+ARCHIVE_SOURCE_MODEL = "model"
+ARCHIVE_SOURCE_AUTHOR_UPLOAD = "author_upload"
+ARCHIVE_SOURCE_COLLECTION_MODELS = "collection_models"
+ARCHIVE_MODEL_URL_RE = re.compile(
+    r"(https?://(?:www\.)?makerworld\.com(?:\.cn)?/zh/models/[^\s#]+)",
+    re.IGNORECASE,
+)
+ARCHIVE_AUTHOR_UPLOAD_URL_RE = re.compile(
+    r"^https?://(?:www\.)?makerworld\.com(?:\.cn)?/zh/@[^/?#]+/upload/?(?:\?.*)?$",
+    re.IGNORECASE,
+)
+ARCHIVE_COLLECTION_MODELS_URL_RE = re.compile(
+    r"^https?://(?:www\.)?makerworld\.com(?:\.cn)?/zh/@[^/?#]+/collections/models/?(?:\?.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _build_archive_progress(
+    percent: int = 0,
+    phase: str = "queued",
+    label: str = "等待执行",
+    current: int = 0,
+    total: int = 0,
+) -> dict:
+    return {
+        "percent": max(min(int(percent or 0), 100), 0),
+        "phase": str(phase or "queued").strip() or "queued",
+        "label": str(label or "").strip() or "等待执行",
+        "current": max(int(current or 0), 0),
+        "total": max(int(total or 0), 0),
+    }
+
+
+def _normalize_archive_url(raw_url: str, strip_pagination: bool = False) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return text
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    if strip_pagination:
+        query_items = [(k, v) for k, v in query_items if str(k or "").lower() not in {"page", "p", "cursor", "offset"}]
+    query = urlencode(query_items, doseq=True)
+    normalized = parsed._replace(fragment="", query=query)
+    return urlunparse(normalized).rstrip("?")
+
+
+def parse_archive_target_url(raw_url: str) -> dict:
+    model_url = extract_makerworld_model_url(raw_url)
+    if model_url:
+        normalized = _normalize_archive_url(model_url)
+        return {
+            "kind": ARCHIVE_KIND_SINGLE,
+            "source_type": ARCHIVE_SOURCE_MODEL,
+            "normalized_url": normalized,
+            "item_url": normalized,
+            "dedupe_key": f"{ARCHIVE_KIND_SINGLE}:{normalized}",
+        }
+
+    normalized = _normalize_archive_url(raw_url, strip_pagination=True)
+    if ARCHIVE_AUTHOR_UPLOAD_URL_RE.match(normalized):
+        return {
+            "kind": ARCHIVE_KIND_BATCH,
+            "source_type": ARCHIVE_SOURCE_AUTHOR_UPLOAD,
+            "normalized_url": normalized,
+            "item_url": "",
+            "dedupe_key": f"{ARCHIVE_KIND_BATCH}:{normalized}",
+        }
+    if ARCHIVE_COLLECTION_MODELS_URL_RE.match(normalized):
+        return {
+            "kind": ARCHIVE_KIND_BATCH,
+            "source_type": ARCHIVE_SOURCE_COLLECTION_MODELS,
+            "normalized_url": normalized,
+            "item_url": "",
+            "dedupe_key": f"{ARCHIVE_KIND_BATCH}:{normalized}",
+        }
+    raise ValueError("链接格式无效，仅支持 makerworld 模型链接、作者上传页或收藏夹页")
+
+
+def _archive_task_model_url(task: Optional[dict]) -> str:
+    if not isinstance(task, dict):
+        return ""
+    return str(task.get("item_url") or task.get("url") or "").strip()
+
+
+def _update_task_progress(task: Optional[dict], **changes):
+    if not isinstance(task, dict):
+        return
+    progress = task.get("progress") if isinstance(task.get("progress"), dict) else _build_archive_progress()
+    if "percent" in changes:
+        progress["percent"] = max(min(int(changes.get("percent") or 0), 100), 0)
+    if "phase" in changes:
+        progress["phase"] = str(changes.get("phase") or progress.get("phase") or "queued").strip() or "queued"
+    if "label" in changes:
+        progress["label"] = str(changes.get("label") or progress.get("label") or "").strip() or "处理中"
+    if "current" in changes:
+        progress["current"] = max(int(changes.get("current") or 0), 0)
+    if "total" in changes:
+        progress["total"] = max(int(changes.get("total") or 0), 0)
+    task["progress"] = progress
+    if "current_item" in changes:
+        task["current_item"] = changes.get("current_item")
 
 
 def _build_archive_task_snapshot(task: dict) -> dict:
     return {
         "task_id": task.get("task_id"),
         "url": task.get("url"),
+        "kind": task.get("kind") or ARCHIVE_KIND_SINGLE,
+        "source_type": task.get("source_type") or ARCHIVE_SOURCE_MODEL,
+        "source_url": task.get("source_url") or task.get("url"),
+        "item_url": task.get("item_url") or task.get("url"),
+        "progress": deepcopy(task.get("progress") or _build_archive_progress()),
+        "stats": deepcopy(task.get("stats") or {}),
+        "children": deepcopy(task.get("children") or []),
+        "current_item": deepcopy(task.get("current_item")) if isinstance(task.get("current_item"), dict) else task.get("current_item"),
         "status": task.get("status"),
         "queue_position": task.get("queue_position"),
         "created_at": task.get("created_at"),
@@ -202,30 +318,33 @@ def _refresh_archive_queue_positions_locked():
             task["queue_position"] = idx + 1
 
 
-def _find_active_archive_task_locked(model_url: str) -> Optional[dict]:
-    normalized = str(model_url or "").strip()
+def _find_active_archive_task_locked(dedupe_key: str) -> Optional[dict]:
+    normalized = str(dedupe_key or "").strip()
     if not normalized:
         return None
     if ARCHIVE_RUNNING_TASK_ID:
         running_task = ARCHIVE_QUEUE_TASKS.get(ARCHIVE_RUNNING_TASK_ID)
         if isinstance(running_task, dict):
-            if str(running_task.get("url") or "").strip() == normalized and str(running_task.get("status") or "") == "running":
+            if str(running_task.get("dedupe_key") or "").strip() == normalized and str(running_task.get("status") or "") == "running":
                 return running_task
     for task_id in ARCHIVE_QUEUE_PENDING:
         task = ARCHIVE_QUEUE_TASKS.get(task_id)
         if not isinstance(task, dict):
             continue
-        if str(task.get("url") or "").strip() == normalized and str(task.get("status") or "") == "queued":
+        if str(task.get("dedupe_key") or "").strip() == normalized and str(task.get("status") or "") == "queued":
             return task
     return None
 
 
 def _enqueue_archive_task(url: str) -> dict:
-    model_url = extract_makerworld_model_url(url)
-    if not model_url:
-        raise ValueError("链接格式无效，仅支持 makerworld 模型链接")
+    target = parse_archive_target_url(url)
+    normalized_url = target.get("normalized_url") or ""
+    kind = target.get("kind") or ARCHIVE_KIND_SINGLE
+    source_type = target.get("source_type") or ARCHIVE_SOURCE_MODEL
+    item_url = target.get("item_url") or normalized_url
+    dedupe_key = target.get("dedupe_key") or normalized_url
     with ARCHIVE_QUEUE_COND:
-        existing = _find_active_archive_task_locked(model_url)
+        existing = _find_active_archive_task_locked(dedupe_key)
         if isinstance(existing, dict):
             return {
                 "task": _build_archive_task_snapshot(existing),
@@ -234,7 +353,12 @@ def _enqueue_archive_task(url: str) -> dict:
         task_id = uuid.uuid4().hex
         task = {
             "task_id": task_id,
-            "url": model_url,
+            "url": item_url or normalized_url,
+            "item_url": item_url or normalized_url,
+            "source_url": normalized_url,
+            "kind": kind,
+            "source_type": source_type,
+            "dedupe_key": dedupe_key,
             "status": "queued",
             "queue_position": 0,
             "created_at": now_iso(),
@@ -243,6 +367,22 @@ def _enqueue_archive_task(url: str) -> dict:
             "message": "已加入归档队列",
             "error": "",
             "result": None,
+            "progress": _build_archive_progress(
+                percent=0,
+                phase="queued",
+                label="等待执行",
+                current=0,
+                total=0 if kind == ARCHIVE_KIND_BATCH else 1,
+            ),
+            "stats": {
+                "discovered": 0 if kind == ARCHIVE_KIND_BATCH else 1,
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+            },
+            "children": [],
+            "current_item": None,
         }
         ARCHIVE_QUEUE_TASKS[task_id] = task
         ARCHIVE_QUEUE_PENDING.append(task_id)
@@ -286,15 +426,21 @@ def _archive_queue_worker_loop():
             task["started_at"] = now_iso()
             task["message"] = "归档执行中"
             task["error"] = ""
+            _update_task_progress(task, percent=1, phase="running", label="任务开始执行")
 
         try:
-            result = archive_model_with_lock(task.get("url") or "")
-            NOTIFIER.notify_success(result.get("notify_payload") or {})
-            if len(result.get("missing_3mf") or []) > 0:
-                notify_archive_missing_download_issue(result)
+            if str(task.get("kind") or ARCHIVE_KIND_SINGLE) == ARCHIVE_KIND_BATCH:
+                result = _execute_batch_archive_task(task)
+                if int(result.get("success") or 0) <= 0 and int(result.get("failed") or 0) > 0:
+                    raise RuntimeError(result.get("message") or "批量归档失败")
+            else:
+                result = _execute_single_archive_task(task)
+                NOTIFIER.notify_success(result.get("notify_payload") or {})
+                if len(result.get("missing_3mf") or []) > 0:
+                    notify_archive_missing_download_issue(result)
             task["status"] = "success"
             task["result"] = result
-            task["message"] = result.get("message") or "模型归档成功"
+            task["message"] = result.get("message") or ("批量归档成功" if str(task.get("kind")) == ARCHIVE_KIND_BATCH else "模型归档成功")
         except Exception as e:
             logger.exception("队列归档任务失败 task_id=%s", task_id)
             title, detail = classify_archive_exception(e)
@@ -302,6 +448,18 @@ def _archive_queue_worker_loop():
             task["status"] = "failed"
             task["error"] = str(e)
             task["message"] = f"归档失败: {e}"
+            stats = task.get("stats") if isinstance(task.get("stats"), dict) else {}
+            discovered = max(int(stats.get("discovered") or 0), 1 if str(task.get("kind")) == ARCHIVE_KIND_SINGLE else 0)
+            processed = max(int(stats.get("processed") or 0), 1 if str(task.get("kind")) == ARCHIVE_KIND_SINGLE else 0)
+            failed = max(int(stats.get("failed") or 0), 1)
+            task["stats"] = {
+                "discovered": discovered,
+                "processed": processed,
+                "success": max(int(stats.get("success") or 0), 0),
+                "failed": failed,
+                "skipped": max(int(stats.get("skipped") or 0), 0),
+            }
+            _update_task_progress(task, percent=100, phase="failed", label=task["message"])
         finally:
             task["finished_at"] = now_iso()
             try:
@@ -362,6 +520,458 @@ def get_archive_queue_status() -> dict:
             "queued": queued,
             "recent": recent,
         }
+
+
+def _makerworld_origin_for_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "https://makerworld.com.cn"
+
+
+def _is_cloudflare_block_page(html_text: str) -> bool:
+    text = str(html_text or "")
+    if not text:
+        return False
+    lowered = text.lower()
+    return "just a moment" in lowered and "cf_chl" in lowered
+
+
+def _normalize_model_page_url(raw_value: str, base_url: str) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    absolute = urljoin(base_url, text) if text.startswith("/") else text
+    match = ARCHIVE_MODEL_URL_RE.search(absolute)
+    if not match:
+        rel_match = re.search(r"(/zh/models/[^\s\"'<>#]+)", absolute, re.IGNORECASE)
+        if rel_match:
+            absolute = urljoin(base_url, rel_match.group(1))
+        else:
+            return ""
+    else:
+        absolute = match.group(1)
+    return _normalize_archive_url(absolute)
+
+
+def _extract_model_urls_from_text(text: str, base_url: str) -> List[str]:
+    raw = str(text or "")
+    if not raw:
+        return []
+    found = []
+    seen = set()
+    for match in ARCHIVE_MODEL_URL_RE.finditer(raw):
+        normalized = _normalize_model_page_url(match.group(1), base_url)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            found.append(normalized)
+    for match in re.finditer(r"(/zh/models/[^\s\"'<>#]+)", raw, re.IGNORECASE):
+        normalized = _normalize_model_page_url(match.group(1), base_url)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            found.append(normalized)
+    return found
+
+
+def _append_unique_urls(target: List[str], values: List[str], seen: set[str]):
+    for item in values or []:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        target.append(normalized)
+
+
+def _collect_model_urls_from_payload(node: Any, base_url: str, out: List[str], seen: set[str], depth: int = 0):
+    if depth > 12 or node is None:
+        return
+    if isinstance(node, str):
+        _append_unique_urls(out, _extract_model_urls_from_text(node, base_url), seen)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _collect_model_urls_from_payload(item, base_url, out, seen, depth + 1)
+        return
+    if not isinstance(node, dict):
+        return
+
+    model_id = node.get("designId") or node.get("design_id") or node.get("modelId") or node.get("model_id") or node.get("id")
+    looks_like_model = False
+    if model_id is not None:
+        text_id = str(model_id).strip()
+        looks_like_model = bool(re.fullmatch(r"\d{3,}", text_id)) and any(
+            key in node
+            for key in (
+                "designId",
+                "designTitle",
+                "modelTitle",
+                "coverUrl",
+                "coverImage",
+                "downloadCount",
+                "printCount",
+                "designCreator",
+                "summary",
+                "likeCount",
+                "title",
+            )
+        )
+        if looks_like_model:
+            candidate = _normalize_model_page_url(f"{_makerworld_origin_for_url(base_url)}/zh/models/{text_id}", base_url)
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+
+    for value in node.values():
+        _collect_model_urls_from_payload(value, base_url, out, seen, depth + 1)
+
+
+def _extract_page_count_hint_from_payload(node: Any, depth: int = 0, found: Optional[List[int]] = None) -> List[int]:
+    if found is None:
+        found = []
+    if depth > 10 or node is None:
+        return found
+    if isinstance(node, list):
+        for item in node:
+            _extract_page_count_hint_from_payload(item, depth + 1, found)
+        return found
+    if not isinstance(node, dict):
+        return found
+    for key, value in node.items():
+        key_text = str(key or "").strip().lower()
+        if key_text in {"pagecount", "totalpage", "totalpages", "maxpage", "pages"}:
+            try:
+                numeric = int(value)
+            except Exception:
+                numeric = 0
+            if 1 < numeric <= 200:
+                found.append(numeric)
+        _extract_page_count_hint_from_payload(value, depth + 1, found)
+    return found
+
+
+def _extract_page_count_hint(html_text: str) -> int:
+    hints: List[int] = []
+    for match in re.finditer(r"[?&]page=(\d+)", str(html_text or ""), re.IGNORECASE):
+        try:
+            numeric = int(match.group(1))
+        except Exception:
+            numeric = 0
+        if 1 < numeric <= 200:
+            hints.append(numeric)
+    try:
+        next_data = extract_next_data(html_text)
+    except Exception:
+        next_data = {}
+    hints.extend(_extract_page_count_hint_from_payload(next_data))
+    return max(hints) if hints else 0
+
+
+def _extract_model_urls_from_html(html_text: str, page_url: str) -> List[str]:
+    base_url = _makerworld_origin_for_url(page_url)
+    found_from_payload: List[str] = []
+    seen_payload: set[str] = set()
+    try:
+        next_data = extract_next_data(html_text)
+    except Exception:
+        next_data = {}
+    _collect_model_urls_from_payload(next_data, base_url, found_from_payload, seen_payload)
+    if found_from_payload:
+        return found_from_payload
+    found_from_text: List[str] = []
+    seen_text: set[str] = set()
+    _append_unique_urls(found_from_text, _extract_model_urls_from_text(html_text, base_url), seen_text)
+    return found_from_text
+
+
+def _set_page_query(url: str, page: int) -> str:
+    parsed = urlparse(str(url or "").strip())
+    items = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if str(k or "").lower() != "page"]
+    items.append(("page", str(max(int(page or 1), 1))))
+    return urlunparse(parsed._replace(query=urlencode(items, doseq=True)))
+
+
+def _build_archive_http_session(raw_cookie: str) -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (MW-Fetcher)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+        }
+    )
+    session.cookies.update(parse_cookies(raw_cookie or ""))
+    return session
+
+
+def _resolve_batch_model_urls_with_cookie(source_url: str, raw_cookie: str, progress_callback=None) -> dict:
+    source = _normalize_archive_url(source_url, strip_pagination=True)
+    if not source:
+        raise ValueError("批量归档链接不能为空")
+    session = _build_archive_http_session(raw_cookie)
+    all_urls: List[str] = []
+    seen: set[str] = set()
+    pages_fetched = 0
+    page_count_hint = 0
+    max_pages = 20
+
+    for page in range(1, max_pages + 1):
+        page_url = source if page == 1 else _set_page_query(source, page)
+        if callable(progress_callback):
+            progress_callback(
+                {
+                    "percent": min(12, 4 + page),
+                    "message": f"正在解析列表页（第 {page} 页）",
+                    "phase": "discovering",
+                }
+            )
+        html_text = fetch_html_with_requests(session, page_url, raw_cookie)
+        if not html_text:
+            html_text = fetch_html_with_curl(page_url, raw_cookie)
+        elif "__NEXT_DATA__" not in html_text and "__NUXT__" not in html_text:
+            html_text = fetch_html_with_curl(page_url, raw_cookie)
+        if _is_cloudflare_block_page(html_text):
+            raise RuntimeError("列表页被 Cloudflare 验证拦截，请更新 Cookie（含 cf_clearance）后重试")
+
+        page_urls = _extract_model_urls_from_html(html_text, page_url)
+        if page == 1:
+            page_count_hint = _extract_page_count_hint(html_text)
+        pages_fetched = page
+        before_count = len(all_urls)
+        _append_unique_urls(all_urls, page_urls, seen)
+        new_count = len(all_urls) - before_count
+
+        if page_count_hint and page >= page_count_hint:
+            break
+        if page > 1 and new_count <= 0:
+            break
+        if page == 1 and not page_urls:
+            break
+
+    return {
+        "model_urls": all_urls,
+        "pages_fetched": pages_fetched,
+        "page_count_hint": page_count_hint,
+    }
+
+
+def resolve_batch_model_urls(source_url: str, progress_callback=None) -> dict:
+    source = _normalize_archive_url(source_url, strip_pagination=True)
+
+    def _runner(cookie: str, _platform: str, _cookie_index: int, _entry: dict):
+        return _resolve_batch_model_urls_with_cookie(source, cookie, progress_callback=progress_callback)
+
+    return run_with_cookie_failover(CFG, source, "列表页解析", _runner)
+
+
+def _execute_single_archive_task(task: dict) -> dict:
+    model_url = _archive_task_model_url(task)
+    task["stats"] = {"discovered": 1, "processed": 0, "success": 0, "failed": 0, "skipped": 0}
+    _update_task_progress(
+        task,
+        percent=2,
+        phase="running",
+        label="准备开始单模型归档",
+        current=0,
+        total=1,
+        current_item={"index": 1, "total": 1, "url": model_url, "status": "running", "message": "等待执行"},
+    )
+
+    def _progress(payload: dict):
+        info = payload if isinstance(payload, dict) else {}
+        _update_task_progress(
+            task,
+            percent=info.get("percent", 0),
+            phase=info.get("phase", "running"),
+            label=info.get("message") or "归档执行中",
+            current=1 if int(info.get("percent") or 0) >= 100 else 0,
+            total=1,
+            current_item={
+                "index": 1,
+                "total": 1,
+                "url": model_url,
+                "status": "running",
+                "message": info.get("message") or "归档执行中",
+            },
+        )
+
+    result = archive_model_with_lock(model_url, progress_callback=_progress)
+    task["stats"] = {"discovered": 1, "processed": 1, "success": 1, "failed": 0, "skipped": 0}
+    _update_task_progress(
+        task,
+        percent=100,
+        phase="done",
+        label=result.get("message") or "模型归档成功",
+        current=1,
+        total=1,
+        current_item={
+            "index": 1,
+            "total": 1,
+            "url": model_url,
+            "status": "success",
+            "message": result.get("message") or "模型归档成功",
+            "work_dir": result.get("work_dir") or "",
+        },
+    )
+    return result
+
+
+def _execute_batch_archive_task(task: dict) -> dict:
+    source_url = str(task.get("source_url") or task.get("url") or "").strip()
+    source_type = str(task.get("source_type") or ARCHIVE_SOURCE_COLLECTION_MODELS).strip()
+    _update_task_progress(task, percent=3, phase="discovering", label="正在解析列表页", current=0, total=0)
+    task["stats"] = {"discovered": 0, "processed": 0, "success": 0, "failed": 0, "skipped": 0}
+
+    discovery = resolve_batch_model_urls(source_url, progress_callback=lambda payload: _update_task_progress(
+        task,
+        percent=(payload or {}).get("percent", 5),
+        phase=(payload or {}).get("phase", "discovering"),
+        label=(payload or {}).get("message") or "正在解析列表页",
+    ))
+    model_urls = discovery.get("model_urls") if isinstance(discovery, dict) else []
+    model_urls = [str(item or "").strip() for item in (model_urls or []) if str(item or "").strip()]
+    if not model_urls:
+        raise RuntimeError("未从列表页解析到任何模型链接，请确认 Cookie 有效且页面可访问")
+
+    total_models = len(model_urls)
+    children = [
+        {
+            "index": idx,
+            "url": model_url,
+            "status": "queued",
+            "message": "等待归档",
+        }
+        for idx, model_url in enumerate(model_urls, start=1)
+    ]
+    task["children"] = children
+    task["stats"] = {"discovered": total_models, "processed": 0, "success": 0, "failed": 0, "skipped": 0}
+    _update_task_progress(
+        task,
+        percent=12,
+        phase="running",
+        label=f"已发现 {total_models} 个模型，准备批量归档",
+        current=0,
+        total=total_models,
+    )
+
+    success_count = 0
+    failed_count = 0
+    child_results = []
+
+    for idx, model_url in enumerate(model_urls, start=1):
+        child = children[idx - 1]
+        child["status"] = "running"
+        child["message"] = "准备开始"
+
+        def _child_progress(payload: dict):
+            info = payload if isinstance(payload, dict) else {}
+            child["message"] = info.get("message") or "归档执行中"
+            child["status"] = "running"
+            batch_percent = 12 + int(((idx - 1) + max(min(int(info.get("percent") or 0), 100), 0) / 100) * 86 / max(total_models, 1))
+            _update_task_progress(
+                task,
+                percent=min(batch_percent, 98),
+                phase="running",
+                label=f"正在归档第 {idx}/{total_models} 个模型",
+                current=idx - 1,
+                total=total_models,
+                current_item={
+                    "index": idx,
+                    "total": total_models,
+                    "url": model_url,
+                    "status": "running",
+                    "message": info.get("message") or "归档执行中",
+                },
+            )
+
+        try:
+            result = archive_model_with_lock(model_url, progress_callback=_child_progress)
+            success_count += 1
+            child["status"] = "success"
+            child["message"] = result.get("message") or "模型归档成功"
+            child["work_dir"] = result.get("work_dir") or ""
+            child["model_id"] = result.get("model_id") or ""
+            child_results.append({"url": model_url, "status": "success", "result": result})
+            task["stats"] = {
+                "discovered": total_models,
+                "processed": idx,
+                "success": success_count,
+                "failed": failed_count,
+                "skipped": 0,
+            }
+            _update_task_progress(
+                task,
+                percent=12 + int(idx * 86 / max(total_models, 1)),
+                phase="running",
+                label=f"已完成 {idx}/{total_models} 个模型",
+                current=idx,
+                total=total_models,
+                current_item={
+                    "index": idx,
+                    "total": total_models,
+                    "url": model_url,
+                    "status": "success",
+                    "message": child["message"],
+                    "work_dir": child.get("work_dir") or "",
+                },
+            )
+        except Exception as err:
+            failed_count += 1
+            child["status"] = "failed"
+            child["message"] = str(err)
+            child_results.append({"url": model_url, "status": "failed", "error": str(err)})
+            task["stats"] = {
+                "discovered": total_models,
+                "processed": idx,
+                "success": success_count,
+                "failed": failed_count,
+                "skipped": 0,
+            }
+            _update_task_progress(
+                task,
+                percent=12 + int(idx * 86 / max(total_models, 1)),
+                phase="running",
+                label=f"第 {idx}/{total_models} 个模型归档失败",
+                current=idx,
+                total=total_models,
+                current_item={
+                    "index": idx,
+                    "total": total_models,
+                    "url": model_url,
+                    "status": "failed",
+                    "message": str(err),
+                },
+            )
+
+    summary_message = f"批量归档完成：共 {total_models} 个，成功 {success_count}，失败 {failed_count}"
+    final_result = {
+        "kind": ARCHIVE_KIND_BATCH,
+        "source_type": source_type,
+        "source_url": source_url,
+        "resolved_models": total_models,
+        "pages_fetched": int(discovery.get("pages_fetched") or 0) if isinstance(discovery, dict) else 0,
+        "page_count_hint": int(discovery.get("page_count_hint") or 0) if isinstance(discovery, dict) else 0,
+        "success": success_count,
+        "failed": failed_count,
+        "skipped": 0,
+        "children": deepcopy(children),
+        "message": summary_message,
+    }
+    _update_task_progress(
+        task,
+        percent=100,
+        phase="done",
+        label=summary_message,
+        current=total_models,
+        total=total_models,
+        current_item={
+            "index": total_models,
+            "total": total_models,
+            "status": "success" if failed_count <= 0 else "partial",
+            "message": summary_message,
+        },
+    )
+    return final_result
 
 
 def load_version_values() -> dict:
@@ -3238,8 +3848,11 @@ def build_archive_notify_payload(result: dict, final_dir: Path) -> dict:
     return payload
 
 
-def archive_model_with_lock(url: str) -> dict:
-    model_url = extract_makerworld_model_url(url)
+def archive_model_with_lock(url: str, progress_callback=None) -> dict:
+    target = parse_archive_target_url(url)
+    if str(target.get("kind") or "") != ARCHIVE_KIND_SINGLE:
+        raise ValueError("当前归档执行器仅支持单模型链接")
+    model_url = str(target.get("item_url") or "").strip()
     if not model_url:
         raise ValueError("链接格式无效，仅支持 makerworld 模型链接")
 
@@ -3247,6 +3860,14 @@ def archive_model_with_lock(url: str) -> dict:
         def _runner(cookie: str, platform: str, cookie_index: int, _entry: dict):
             reset_tmp_dir(TMP_DIR)
             logger.info("归档使用 %s Cookie #%s", platform, cookie_index + 1)
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "percent": 3,
+                        "phase": "running",
+                        "message": f"已选择 {format_cookie_platform_label(platform)} Cookie #{cookie_index + 1}",
+                    }
+                )
             started_perf = perf_counter()
             result = archive_model(
                 model_url,
@@ -3255,6 +3876,7 @@ def archive_model_with_lock(url: str) -> dict:
                 Path(CFG["logs_dir"]),
                 logger,
                 existing_root=Path(CFG["download_dir"]),
+                progress_callback=progress_callback,
             )
             tmp_work_dir = Path(result.get("work_dir") or "")
             final_dir = finalize_tmp_archive(tmp_work_dir, Path(CFG["download_dir"]), logger)
@@ -3814,14 +4436,15 @@ async def api_archive(body: dict):
             raise RuntimeError("归档任务创建失败")
         queue_position = int(task.get("queue_position") or 0)
         status = str(task.get("status") or "")
-        msg = "归档任务已加入队列，等待执行"
+        kind = str(task.get("kind") or ARCHIVE_KIND_SINGLE)
+        msg = "归档任务已加入队列，等待执行" if kind == ARCHIVE_KIND_SINGLE else "批量归档任务已加入队列，等待执行"
         if deduplicated:
             if status == "running":
-                msg = "相同模型正在归档，已复用执行中任务"
+                msg = "相同任务正在执行，已复用执行中任务"
             else:
-                msg = "相同模型已在归档队列中，已复用排队任务"
+                msg = "相同任务已在归档队列中，已复用排队任务"
         elif queue_position == 1 and not ARCHIVE_RUNNING_TASK_ID:
-            msg = "归档任务已接收，正在准备执行"
+            msg = "归档任务已接收，正在准备执行" if kind == ARCHIVE_KIND_SINGLE else "批量归档任务已接收，正在准备执行"
         return {
             "status": "ok",
             "message": msg,

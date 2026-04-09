@@ -5,7 +5,7 @@ import sys
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 """
@@ -27,6 +27,21 @@ def log(*args):
 def log_section(title: str):
     log("")
     log("=" * 10, title, "=" * 10)
+
+
+def emit_progress(progress_callback, percent: int, message: str, extra: Optional[dict] = None):
+    if not callable(progress_callback):
+        return
+    payload = {
+        "percent": max(min(int(percent or 0), 100), 0),
+        "message": str(message or "").strip(),
+    }
+    if isinstance(extra, dict) and extra:
+        payload.update(extra)
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
 
 
 def sanitize_filename(name: str) -> str:
@@ -1811,7 +1826,7 @@ def build_index_html(meta: dict, assets: dict = None) -> str:
     return html
 
 
-def rebuild_once(meta_path: Path):
+def rebuild_once(meta_path: Path, progress_callback=None):
     with meta_path.open("r", encoding="utf-8") as f:
         meta = json.load(f)
 
@@ -1819,6 +1834,7 @@ def rebuild_once(meta_path: Path):
     work_dir = meta_path.parent / base_name
     ensure_dir(work_dir)
 
+    emit_progress(progress_callback, 84, f"正在整理归档目录：{base_name}")
     log("归档生成页面:", base_name)
 
     # 1. 写/移动 meta.json 到目标目录，仅保留目标目录一份
@@ -1895,6 +1911,7 @@ def rebuild_once(meta_path: Path):
     instances = meta.get("instances", []) or []
     inst_files = []
     meta_changed = False
+    total_instance_steps = max(len(instances), 1)
     for inst in instances:
         url = inst.get("downloadUrl")
         if not url:
@@ -1911,6 +1928,13 @@ def rebuild_once(meta_path: Path):
             "title": inst.get("title") or inst.get("name") or str(inst.get("id")),
             "file": dest.name,
         })
+        processed_instances = len(inst_files)
+        emit_progress(
+            progress_callback,
+            84 + min(int(processed_instances * 10 / total_instance_steps), 10),
+            f"正在下载实例文件（{processed_instances}/{len(instances)}）",
+            {"current": processed_instances, "total": len(instances)},
+        )
 
     attachments = meta.get("attachments") or []
     attachment_files = []
@@ -1936,6 +1960,12 @@ def rebuild_once(meta_path: Path):
             dest = files_dir / local_name
             download_file(REBUILD_SESSION, url, dest)
             attachment_files.append(local_name)
+            emit_progress(
+                progress_callback,
+                95,
+                f"正在下载附件（{len(attachment_files)}/{len(attachments)}）",
+                {"current": len(attachment_files), "total": len(attachments)},
+            )
 
     offline = meta.get("offlineFiles")
     if not isinstance(offline, dict):
@@ -1976,6 +2006,7 @@ def rebuild_once(meta_path: Path):
     index_html = build_index_html(meta, assets)
     (work_dir / "index.html").write_text(index_html, encoding="utf-8")
 
+    emit_progress(progress_callback, 98, "正在生成离线页面")
     log("完成归档:", work_dir)
 
 
@@ -1986,6 +2017,7 @@ def archive_model(
     logs_dir: Path,
     logger=None,
     existing_root: Optional[Path] = None,
+    progress_callback=None,
 ):
     """
     对外主入口：采集 + 下载文件 + 生成 meta/index.html/style.css
@@ -2007,11 +2039,13 @@ def archive_model(
     sess.cookies.update(parsed_cookies)
 
     fetch_url = url.split("#", 1)[0]
+    emit_progress(progress_callback, 5, "准备抓取模型页面")
     log(logger, "获取页面:", fetch_url)
     log(logger, "请求头:", sess.headers)
     log(logger, "请求 Cookie 头(前 300 字符):", raw_cookie_header[:300])
 
     # 优先用 requests 拉取页面，失败再回退 curl
+    emit_progress(progress_callback, 12, "正在获取模型页面")
     html_text = fetch_html_with_requests(sess, fetch_url, raw_cookie_header)
     if not html_text:
         html_text = fetch_html_with_curl(fetch_url, raw_cookie_header)
@@ -2035,6 +2069,7 @@ def archive_model(
 
     api_host_hint = _extract_api_host(html_text)
     if design is None:
+        emit_progress(progress_callback, 22, "页面数据不足，正在回退接口抓取")
         design = fetch_design_from_api(sess, raw_cookie_header, fetch_url, api_host_hint=api_host_hint)
 
     if design is None:
@@ -2043,6 +2078,7 @@ def archive_model(
         raise RuntimeError("未能解析模型数据，请确认 cookie/页面结构")
 
     design["url"] = url
+    emit_progress(progress_callback, 30, "已解析模型信息，准备下载资源")
 
     design_id = design.get("id") or _parse_design_id(url)
     if design_id is None:
@@ -2059,6 +2095,7 @@ def archive_model(
         author["avatarLocal"] = fname
         author["avatarRelPath"] = f"images/{fname}"
 
+    emit_progress(progress_callback, 40, "正在整理摘要与设计图片")
     summary = parse_summary(design, base_name, sess, images_dir)
     design_images, cover_meta = collect_design_images(design, sess, images_dir, base_name)
     attachments = extract_design_attachments(design)
@@ -2068,10 +2105,18 @@ def archive_model(
 
     inst_list = []
     planned_instances_dir = out_root / base_name / "instances"
-    for inst in extract_instances(design):
+    extracted_instances = extract_instances(design)
+    total_instances = max(len(extracted_instances), 1)
+    for idx, inst in enumerate(extracted_instances, start=1):
         inst_id = inst.get("id") or inst.get("instanceId")
         if inst_id is None:
             continue
+        emit_progress(
+            progress_callback,
+            55 + min(int(idx * 20 / total_instances), 20),
+            f"正在处理实例信息（{idx}/{len(extracted_instances)}）",
+            {"current": idx, "total": len(extracted_instances)},
+        )
         plates, pics = collect_instance_media(inst, sess, images_dir, base_name)
         api_url = inst.get("apiUrl") or f"{origin}/api/v1/design-service/instance/{inst_id}/f3mf?type=download&fileType="
         name3mf, url3mf, used_api_url = fetch_instance_3mf(
@@ -2117,6 +2162,7 @@ def archive_model(
     meta = build_meta(design, summary, design_images, cover_meta, inst_list, author, base_name, attachments=attachments)
     meta_path = out_root / f"{base_name}_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    emit_progress(progress_callback, 78, "元数据已生成，准备落盘")
     log(logger, "已保存 meta:", meta_path)
 
     # 归档整理
@@ -2124,7 +2170,7 @@ def archive_model(
     work_dir = meta_path.parent / base_name
     work_dir.mkdir(parents=True, exist_ok=True)
     try:
-        rebuild_once(meta_path)
+        rebuild_once(meta_path, progress_callback=progress_callback)
     except Exception as e:
         log(logger, "归档/生成本地页面失败:", e)
 
@@ -2139,6 +2185,7 @@ def archive_model(
         log(logger, "缺失 3MF 已记录:", missing_log)
 
     work_dir = meta_path.parent / (meta.get("baseName") or meta_path.stem.replace("_meta", ""))
+    emit_progress(progress_callback, 100, "归档完成")
     return {
         "base_name": base_name,
         "work_dir": str(work_dir.resolve()),

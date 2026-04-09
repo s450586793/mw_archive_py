@@ -134,16 +134,16 @@
       <div class="tab-content" id="tab-archive">
         <div class="form-section">
           <h3>模型归档</h3>
-          <p class="description">输入 MakerWorld 模型链接，一键归档到本地</p>
+          <p class="description">支持单模型、作者上传页、收藏夹页批量归档，并实时显示执行进度</p>
 
           <div class="info-box">
             <i class="fas fa-info-circle"></i>
             <div class="info-box-content">
               <div class="info-box-title">使用说明</div>
               <div class="info-box-text">
-                支持归档 MakerWorld 模型的所有内容，包括图片、3MF 文件、描述等。
-                归档完成后可在模型库中查看。
-                归档过程中可能会造成系统卡顿，请耐心等待归档完成再使用；
+                支持 `模型详情页`、`作者上传页`、`收藏夹模型页` 三种链接。<br>
+                单模型会直接入队归档；作者页和收藏夹页会先自动展开为模型列表，再串行归档并显示批量进度。<br>
+                归档完成后可在模型库中查看，进度面板会持续显示当前队列状态和已完成结果。
               </div>
             </div>
           </div>
@@ -152,11 +152,27 @@
             <label class="form-label">模型链接</label>
             <div class="archive-input-group">
               <input type="text" id="modelUrl" class="form-input"
-                placeholder="https://makerworld.com.cn/zh/models/..." />
-              <button class="btn btn-primary" onclick="startArchive()">
+                placeholder="https://makerworld.com.cn/zh/models/... 或 /zh/@xxx/upload 或 /zh/@xxx/collections/models" />
+              <button class="btn btn-primary" type="button" id="startArchiveBtn" onclick="startArchive()">
                 <i class="fas fa-download"></i> 开始归档
               </button>
             </div>
+          </div>
+
+          <div class="archive-progress-card" id="archiveProgressCard" hidden>
+            <div class="archive-progress-head">
+              <div>
+                <div class="archive-progress-title" id="archiveProgressTitle">等待任务开始</div>
+                <div class="archive-progress-meta" id="archiveProgressMeta">提交任务后会在这里显示实时进度</div>
+              </div>
+              <div class="archive-progress-percent" id="archiveProgressPercent">0%</div>
+            </div>
+            <div class="archive-progress-bar">
+              <div class="archive-progress-fill" id="archiveProgressFill"></div>
+            </div>
+            <div class="archive-progress-status" id="archiveProgressStatus">等待执行</div>
+            <div class="archive-progress-summary" id="archiveProgressSummary"></div>
+            <div class="archive-progress-children" id="archiveProgressChildren"></div>
           </div>
         </div>
       </div>
@@ -728,6 +744,162 @@
       return `${minutes}分${remainSeconds}秒`;
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function translateArchiveSourceType(value) {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'author_upload') return '作者上传页';
+      if (normalized === 'collection_models') return '收藏夹模型页';
+      return '单模型页';
+    }
+
+    function translateArchiveStatus(value) {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'queued') return '排队中';
+      if (normalized === 'running') return '执行中';
+      if (normalized === 'success') return '已完成';
+      if (normalized === 'failed') return '失败';
+      if (normalized === 'partial') return '部分完成';
+      return normalized || '等待中';
+    }
+
+    function getArchiveProgressElements() {
+      return {
+        card: document.getElementById('archiveProgressCard'),
+        title: document.getElementById('archiveProgressTitle'),
+        meta: document.getElementById('archiveProgressMeta'),
+        percent: document.getElementById('archiveProgressPercent'),
+        fill: document.getElementById('archiveProgressFill'),
+        status: document.getElementById('archiveProgressStatus'),
+        summary: document.getElementById('archiveProgressSummary'),
+        children: document.getElementById('archiveProgressChildren'),
+      };
+    }
+
+    function renderArchiveTask(task) {
+      const els = getArchiveProgressElements();
+      if (!els.card) return;
+      if (!task || typeof task !== 'object') {
+        els.card.hidden = true;
+        return;
+      }
+      els.card.hidden = false;
+
+      const progress = task.progress && typeof task.progress === 'object' ? task.progress : {};
+      const stats = task.stats && typeof task.stats === 'object' ? task.stats : {};
+      const kind = String(task.kind || 'single');
+      const sourceLabel = translateArchiveSourceType(task.source_type || 'model');
+      const percent = Math.max(0, Math.min(100, Number(progress.percent || (task.status === 'success' ? 100 : 0))));
+      const queuePosition = Number(task.queue_position || 0);
+      const summaryParts = [];
+      const discovered = Number(stats.discovered || 0);
+      const processed = Number(stats.processed || 0);
+      const success = Number(stats.success || 0);
+      const failed = Number(stats.failed || 0);
+      const skipped = Number(stats.skipped || 0);
+
+      els.title.textContent = kind === 'batch' ? `批量归档：${sourceLabel}` : '单模型归档';
+      els.meta.textContent = [
+        task.task_id ? `任务ID ${task.task_id}` : '',
+        queuePosition > 0 ? `队列位置 ${queuePosition}` : '',
+        task.started_at ? `开始于 ${formatDateTimeText(task.started_at)}` : '',
+      ].filter(Boolean).join(' · ') || '任务已提交';
+      els.percent.textContent = `${percent}%`;
+      els.fill.style.width = `${percent}%`;
+      els.status.textContent = progress.label || task.message || translateArchiveStatus(task.status);
+
+      if (kind === 'batch') {
+        summaryParts.push(`已发现 ${discovered || (Array.isArray(task.children) ? task.children.length : 0)} 个模型`);
+        summaryParts.push(`已处理 ${processed}`);
+        summaryParts.push(`成功 ${success}`);
+        if (failed > 0) summaryParts.push(`失败 ${failed}`);
+        if (skipped > 0) summaryParts.push(`跳过 ${skipped}`);
+      } else {
+        const result = task.result && typeof task.result === 'object' ? task.result : {};
+        summaryParts.push(task.item_url || task.url || '');
+        if (result.work_dir) summaryParts.push(`目录 ${result.work_dir}`);
+      }
+      els.summary.textContent = summaryParts.filter(Boolean).join(' · ');
+
+      const children = Array.isArray(task.children) ? task.children : [];
+      let rows = children;
+      if (kind !== 'batch') {
+        const result = task.result && typeof task.result === 'object' ? task.result : {};
+        rows = [{
+          index: 1,
+          url: task.item_url || task.url || '',
+          status: task.status || 'queued',
+          message: task.message || progress.label || '',
+          work_dir: result.work_dir || '',
+        }];
+      } else if (children.length > 8) {
+        const runningIndex = children.findIndex(item => item && item.status === 'running');
+        if (runningIndex >= 0) {
+          const start = Math.max(runningIndex - 2, 0);
+          rows = children.slice(start, start + 8);
+        } else {
+          rows = children.slice(Math.max(children.length - 8, 0));
+        }
+      }
+
+      if (!rows.length) {
+        els.children.innerHTML = '';
+        return;
+      }
+
+      els.children.innerHTML = rows.map(item => {
+        const row = item && typeof item === 'object' ? item : {};
+        const status = String(row.status || 'queued').trim().toLowerCase();
+        const message = row.work_dir ? `${row.message || ''}${row.message ? ' · ' : ''}${row.work_dir}` : (row.message || '');
+        return `
+          <div class="archive-progress-child">
+            <div class="archive-progress-child-index">#${escapeHtml(row.index || '')}</div>
+            <div class="archive-progress-child-main">
+              <div class="archive-progress-child-url">${escapeHtml(row.url || '-')}</div>
+              <div class="archive-progress-child-message">${escapeHtml(message || translateArchiveStatus(status))}</div>
+            </div>
+            <div class="archive-progress-child-status status-${escapeHtml(status)}">${escapeHtml(translateArchiveStatus(status))}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function stopArchiveTaskPolling() {
+      if (window.__archivePollTimer) {
+        clearTimeout(window.__archivePollTimer);
+        window.__archivePollTimer = null;
+      }
+      if (window.__archivePollController) {
+        try { window.__archivePollController.abort(); } catch (_) { }
+        window.__archivePollController = null;
+      }
+    }
+
+    async function fetchArchiveTask(taskId) {
+      const controller = new AbortController();
+      window.__archivePollController = controller;
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch('/api/archive/tasks/' + encodeURIComponent(taskId), { signal: controller.signal });
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        return await res.json();
+      } finally {
+        clearTimeout(timeoutId);
+        if (window.__archivePollController === controller) {
+          window.__archivePollController = null;
+        }
+      }
+    }
+
     function translateBatchSource(value) {
       const normalized = String(value || '').trim().toLowerCase();
       if (!normalized) return '';
@@ -1067,60 +1239,69 @@
 
     async function pollArchiveTask(taskId) {
       if (!taskId) return;
-      if (!window.__archivePollingTasks) window.__archivePollingTasks = new Set();
-      if (window.__archivePollingTasks.has(taskId)) {
+      if (window.__archiveTrackedTaskId && window.__archiveTrackedTaskId === taskId && window.__archivePollTimer) {
         appendLog('该归档任务正在跟踪中: ' + taskId);
         return;
       }
-      window.__archivePollingTasks.add(taskId);
-      let lastStatus = '';
-      let tick = 0;
-      try {
-        while (tick < 600) {
-          tick += 1;
-          try {
-            const res = await fetch('/api/archive/tasks/' + encodeURIComponent(taskId));
-            if (!res.ok) {
-              const err = await res.text();
-              appendLog('查询归档任务失败: ' + err);
+
+      stopArchiveTaskPolling();
+      window.__archiveTrackedTaskId = taskId;
+      window.__archiveLastProgressSignature = '';
+      window.__archivePollAttempts = 0;
+
+      const tick = async () => {
+        try {
+          window.__archivePollAttempts = Number(window.__archivePollAttempts || 0) + 1;
+          const data = await fetchArchiveTask(taskId);
+          const task = (data && data.task) || {};
+          renderArchiveTask(task);
+
+          const status = String(task.status || '').trim();
+          const progress = task.progress && typeof task.progress === 'object' ? task.progress : {};
+          const pos = Number(task.queue_position || 0);
+          const signature = [status, pos, progress.label || '', progress.percent || 0].join('|');
+          if (signature !== window.__archiveLastProgressSignature) {
+            if (status === 'queued') {
+              appendLog('归档任务排队中，当前位置: ' + (pos > 0 ? pos : '-'));
+            } else if (status === 'running') {
+              appendLog(progress.label || '归档任务开始执行');
+            } else if (status === 'success') {
+              const result = task.result && typeof task.result === 'object' ? task.result : {};
+              const msg = task.message || result.message || '归档任务完成';
+              if (task.kind === 'batch') {
+                appendLog(msg);
+              } else {
+                appendLog(`${msg} -> ${result.work_dir || '-'}`);
+              }
+              loadMissing();
+              stopArchiveTaskPolling();
+              window.__archiveLastProgressSignature = signature;
+              return;
+            } else if (status === 'failed') {
+              const errText = task.error || task.message || '未知错误';
+              appendLog('归档失败: ' + errText);
+              stopArchiveTaskPolling();
+              window.__archiveLastProgressSignature = signature;
               return;
             }
-            const data = await res.json();
-            const task = (data && data.task) || {};
-            const status = task.status || '';
-            const pos = Number(task.queue_position || 0);
-            if (status !== lastStatus) {
-              if (status === 'queued') {
-                appendLog('归档任务排队中，当前位置: ' + (pos > 0 ? pos : '-'));
-              } else if (status === 'running') {
-                appendLog('归档任务开始执行');
-              } else if (status === 'success') {
-                const result = task.result || {};
-                const msg = task.message || result.message || (result.action === 'updated' ? '模型已更新成功' : '模型归档成功');
-                appendLog(`${msg} -> ${result.work_dir || '-'}`);
-                alert(`${msg}\n目录: ${result.work_dir || '-'}`);
-                loadMissing();
-                return;
-              } else if (status === 'failed') {
-                const errText = task.error || task.message || '未知错误';
-                appendLog('归档失败: ' + errText);
-                alert('归档失败: ' + errText);
-                return;
-              }
-              lastStatus = status;
-            } else if (status === 'queued' && tick % 10 === 0) {
-              appendLog('归档任务仍在排队，当前位置: ' + (pos > 0 ? pos : '-'));
-            }
-          } catch (e) {
-            appendLog('查询归档任务异常: ' + (e && e.message ? e.message : e));
+            window.__archiveLastProgressSignature = signature;
+          }
+
+          if (window.__archiveTrackedTaskId === taskId) {
+            window.__archivePollTimer = setTimeout(tick, 1500);
+          }
+        } catch (e) {
+          const errText = e && e.message ? e.message : String(e || '');
+          appendLog('查询归档任务异常: ' + errText);
+          if (window.__archiveTrackedTaskId === taskId && Number(window.__archivePollAttempts || 0) < 600) {
+            window.__archivePollTimer = setTimeout(tick, 2500);
             return;
           }
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          stopArchiveTaskPolling();
         }
-        appendLog('归档任务查询超时，请稍后在日志中查看执行结果');
-      } finally {
-        window.__archivePollingTasks.delete(taskId);
-      }
+      };
+
+      tick();
     }
 
     async function startArchive() {
@@ -1129,32 +1310,61 @@
         alert('请填写模型链接');
         return;
       }
-      appendLog('开始归档: ' + url);
-      const res = await fetch('/api/archive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
+      const startBtn = document.getElementById('startArchiveBtn');
+      if (startBtn) startBtn.disabled = true;
+      renderArchiveTask({
+        task_id: '',
+        kind: 'single',
+        source_type: 'model',
+        status: 'queued',
+        progress: { percent: 1, label: '正在提交任务', phase: 'queued', current: 0, total: 0 },
+        message: '正在提交任务',
+        item_url: url,
+        children: [],
+        stats: {},
       });
-      if (res.ok) {
-        const data = await res.json();
-        const task = (data && data.task) || {};
-        const queuePos = Number(task.queue_position || 0);
-        appendLog((data && data.message) || '归档任务已提交');
-        if (data && data.deduplicated) {
-          appendLog('检测到同一模型重复提交，已复用任务: ' + (task.task_id || '-'));
-        }
-        if (queuePos > 0) {
-          appendLog('当前队列位置: ' + queuePos);
-        }
-        if (task.task_id) {
-          pollArchiveTask(task.task_id);
+      appendLog('开始归档: ' + url);
+      try {
+        const res = await fetch('/api/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const task = (data && data.task) || {};
+          const queuePos = Number(task.queue_position || 0);
+          renderArchiveTask(task);
+          appendLog((data && data.message) || '归档任务已提交');
+          if (data && data.deduplicated) {
+            appendLog('检测到同一任务重复提交，已复用任务: ' + (task.task_id || '-'));
+          }
+          if (queuePos > 0) {
+            appendLog('当前队列位置: ' + queuePos);
+          }
+          if (task.task_id) {
+            pollArchiveTask(task.task_id);
+          } else {
+            appendLog('未返回任务ID，请稍后手动检查归档结果');
+          }
         } else {
-          appendLog('未返回任务ID，请稍后手动检查归档结果');
+          const err = await res.text();
+          appendLog('归档失败: ' + err);
+          renderArchiveTask({
+            task_id: '',
+            kind: 'single',
+            source_type: 'model',
+            status: 'failed',
+            progress: { percent: 100, label: '提交失败', phase: 'failed', current: 0, total: 0 },
+            message: err,
+            item_url: url,
+            children: [],
+            stats: {},
+          });
+          alert('归档失败: ' + err);
         }
-      } else {
-        const err = await res.text();
-        appendLog('归档失败: ' + err);
-        alert('归档失败');
+      } finally {
+        if (startBtn) startBtn.disabled = false;
       }
     }
 
