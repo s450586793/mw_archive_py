@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>安全设置</title>
+  <link rel="icon" href="/static/imgs/fav.ico" sizes="any">
+  <link rel="icon" type="image/png" href="/static/imgs/fav.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: rgba(255, 255, 255, 0.92);
+      --line: #dbe4ee;
+      --text: #132033;
+      --muted: #61748a;
+      --primary: #0f6ccf;
+      --primary-dark: #0a4f98;
+      --danger: #d14343;
+      --ok: #168a52;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15,108,207,.14), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(22,138,82,.12), transparent 26%),
+        linear-gradient(180deg, #f7f9fc, #edf2f8);
+    }
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    .title p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: #fff;
+      color: var(--text);
+      text-decoration: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .btn.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: #fff;
+    }
+    .btn.danger {
+      color: var(--danger);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid rgba(219, 228, 238, 0.9);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.06);
+      backdrop-filter: blur(10px);
+    }
+    .card h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+    .meta {
+      display: grid;
+      gap: 10px;
+    }
+    .meta-label {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .meta-value {
+      font-size: 15px;
+      word-break: break-all;
+    }
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+    .field label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .field input, .field textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--text);
+    }
+    .field textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+    .helper {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .notice {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      display: none;
+    }
+    .notice.show { display: block; }
+    .notice.info { background: #eef5ff; color: #114c8c; }
+    .notice.ok { background: #ecfbf3; color: var(--ok); }
+    .notice.error { background: #fff1f1; color: var(--danger); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status.ok {
+      background: #ecfbf3;
+      color: var(--ok);
+    }
+    .status.off {
+      background: #fff1f1;
+      color: var(--danger);
+    }
+    .empty {
+      color: var(--muted);
+      padding: 14px 0 6px;
+    }
+    @media (max-width: 720px) {
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .actions {
+        width: 100%;
+      }
+      .btn {
+        justify-content: center;
+      }
+      table, thead, tbody, tr, th, td {
+        display: block;
+      }
+      thead {
+        display: none;
+      }
+      tr {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        background: #fff;
+      }
+      td {
+        border: 0;
+        padding: 6px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">
+        <h1><i class="fas fa-shield-halved"></i> 安全设置</h1>
+        <p>网页访问走登录会话，外部 API 调用走 Bearer Token。当前版本 v{{ project_version }}</p>
+      </div>
+      <div class="actions">
+        <a class="btn" href="/"><i class="fas fa-house"></i> 模型库</a>
+        <a class="btn" href="/config"><i class="fas fa-cog"></i> 控制台</a>
+        <a class="btn danger" href="/logout"><i class="fas fa-right-from-bracket"></i> 退出登录</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>登录信息</h2>
+        <div class="meta">
+          <div>
+            <div class="meta-label">当前用户</div>
+            <div class="meta-value" id="authUsername">-</div>
+          </div>
+          <div>
+            <div class="meta-label">认证状态</div>
+            <div class="meta-value" id="authStatus">-</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Token 存储</h2>
+        <div class="meta">
+          <div>
+            <div class="meta-label">配置文件</div>
+            <div class="meta-value" id="tokenFile">-</div>
+          </div>
+          <div>
+            <div class="meta-label">已生成数量</div>
+            <div class="meta-value" id="tokenCount">0</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-bottom:18px;">
+      <h2>生成新 Token</h2>
+      <div class="stack">
+        <div class="field">
+          <label for="tokenNameInput">Token 名称</label>
+          <input id="tokenNameInput" type="text" placeholder="例如：mobile / tampermonkey / backup-script" />
+        </div>
+        <div class="actions">
+          <button class="btn primary" type="button" id="createTokenBtn">
+            <i class="fas fa-key"></i> 生成 Token
+          </button>
+          <button class="btn" type="button" id="copyTokenBtn">
+            <i class="fas fa-copy"></i> 复制最新 Token
+          </button>
+        </div>
+        <div class="field">
+          <label for="newTokenValue">新生成的 Token</label>
+          <textarea id="newTokenValue" readonly placeholder="生成后只展示一次，请及时保存。"></textarea>
+        </div>
+        <div class="helper">调用 API 时请在请求头里传 `Authorization: Bearer &lt;token&gt;`。</div>
+        <div id="tokenNotice" class="notice info"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>已有 Token</h2>
+      <div id="tokenListBox" class="empty">加载中...</div>
+    </section>
+  </div>
+
+  <script>
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function fmtTime(value) {
+      const text = String(value || '').trim();
+      if (!text) return '-';
+      const d = new Date(text);
+      if (Number.isNaN(d.getTime())) return text;
+      return d.toLocaleString();
+    }
+
+    function showNotice(message, type) {
+      const box = document.getElementById('tokenNotice');
+      box.textContent = message || '';
+      box.className = 'notice show ' + (type || 'info');
+    }
+
+    async function apiFetch(url, options) {
+      const res = await fetch(url, Object.assign({ credentials: 'same-origin' }, options || {}));
+      if (res.status === 401) {
+        location.href = '/login';
+        throw new Error('未登录');
+      }
+      return res;
+    }
+
+    async function loadOverview() {
+      const [cfgRes, authRes] = await Promise.all([
+        apiFetch('/api/config'),
+        apiFetch('/api/auth/status')
+      ]);
+      const cfg = await cfgRes.json();
+      const auth = await authRes.json();
+      document.getElementById('tokenFile').textContent = cfg.token_file || '-';
+      document.getElementById('tokenCount').textContent = String(cfg.token_count || 0);
+      document.getElementById('authUsername').textContent = auth.username || cfg.auth_username || '-';
+      document.getElementById('authStatus').innerHTML = auth.logged_in
+        ? '<span class="status ok">已登录</span>'
+        : '<span class="status off">未登录</span>';
+    }
+
+    async function loadTokens() {
+      const box = document.getElementById('tokenListBox');
+      const res = await apiFetch('/api/auth/tokens');
+      const data = await res.json();
+      const tokens = Array.isArray(data.tokens) ? data.tokens : [];
+      document.getElementById('tokenCount').textContent = String(tokens.length);
+      if (!tokens.length) {
+        box.innerHTML = '<div class="empty">还没有生成过 Token。</div>';
+        return;
+      }
+      const rows = tokens.map(item => `
+        <tr>
+          <td>${escapeHtml(item.name || '-')}</td>
+          <td><code>${escapeHtml(item.token_preview || '-')}</code></td>
+          <td>${fmtTime(item.created_at)}</td>
+          <td>${fmtTime(item.last_used_at)}</td>
+          <td>${item.active ? '<span class="status ok">有效</span>' : '<span class="status off">已撤销</span>'}</td>
+          <td>
+            ${item.active ? `<button class="btn danger" type="button" onclick="deleteApiToken('${escapeHtml(item.id)}')"><i class="fas fa-trash"></i> 撤销</button>` : '-'}
+          </td>
+        </tr>
+      `).join('');
+      box.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>预览</th>
+              <th>创建时间</th>
+              <th>最近使用</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    async function createApiToken() {
+      const name = (document.getElementById('tokenNameInput').value || '').trim() || 'API Token';
+      const res = await apiFetch('/api/auth/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const data = await res.json();
+      document.getElementById('newTokenValue').value = data.token || '';
+      showNotice('Token 已生成，只展示这一次。', 'ok');
+      await loadTokens();
+    }
+
+    async function deleteApiToken(tokenId) {
+      if (!tokenId) return;
+      if (!confirm('撤销后这个 Token 将立刻失效，是否继续？')) return;
+      const res = await apiFetch('/api/auth/tokens/' + encodeURIComponent(tokenId), { method: 'DELETE' });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      showNotice('Token 已撤销。', 'ok');
+      await loadTokens();
+    }
+
+    async function copyLatestToken() {
+      const value = document.getElementById('newTokenValue').value || '';
+      if (!value) {
+        showNotice('还没有新生成的 Token。', 'info');
+        return;
+      }
+      await navigator.clipboard.writeText(value);
+      showNotice('最新 Token 已复制到剪贴板。', 'ok');
+    }
+
+    document.getElementById('createTokenBtn').addEventListener('click', async () => {
+      try {
+        await createApiToken();
+      } catch (err) {
+        showNotice('生成 Token 失败: ' + (err && err.message ? err.message : err), 'error');
+      }
+    });
+
+    document.getElementById('copyTokenBtn').addEventListener('click', async () => {
+      try {
+        await copyLatestToken();
+      } catch (err) {
+        showNotice('复制失败: ' + (err && err.message ? err.message : err), 'error');
+      }
+    });
+
+    Promise.all([loadOverview(), loadTokens()]).catch((err) => {
+      showNotice('加载安全设置失败: ' + (err && err.message ? err.message : err), 'error');
+    });
+  </script>
+</body>
+</html>
